@@ -4,7 +4,7 @@ import com.fintechwave.iam.dto.request.LoginRequest;
 import com.fintechwave.iam.dto.request.LogoutRequest;
 import com.fintechwave.iam.dto.request.RefreshTokenRequest;
 import com.fintechwave.iam.dto.request.RegisterRequest;
-import com.fintechwave.iam.dto.response.ApiResponse;
+import com.fintechwave.core.web.ApiResponse;
 import com.fintechwave.iam.dto.response.AuthResponse;
 import com.fintechwave.iam.service.IAuthService;
 import io.swagger.v3.oas.annotations.Operation;

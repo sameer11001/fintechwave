@@ -1,6 +1,6 @@
 package com.fintechwave.iam.service.impl;
 
-import com.fintechwave.iam.config.JwtProperties;
+import com.fintechwave.security.config.JwtProperties;
 import com.fintechwave.iam.domain.entity.RefreshToken;
 import com.fintechwave.iam.domain.entity.User;
 import com.fintechwave.iam.exception.InvalidTokenException;

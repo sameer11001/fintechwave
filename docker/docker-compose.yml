@@ -1,6 +1,5 @@
 services:
 
-  # ── PostgreSQL: IAM ──────────────────────────────────────────────────────────
   postgres-iam:
     image: postgres:16-alpine
     container_name: fintechwave-postgres-iam
@@ -22,7 +21,6 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  # ── PostgreSQL: Transaction ──────────────────────────────────────────────────
   postgres-tx:
     image: postgres:16-alpine
     container_name: fintechwave-postgres-tx
@@ -44,11 +42,8 @@ services:
       start_period: 15s
     restart: unless-stopped
 
-  # ── IAM Service ─────────────────────────────────────────────────────────────
   iam-service:
-    build:
-      context: ..
-      dockerfile: services/iam-service/Dockerfile
+    image: fintechwave/iam:latest
     container_name: fintechwave-iam
     environment:
       DB_HOST:                  postgres-iam
@@ -67,18 +62,15 @@ services:
       postgres-iam:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/swagger-ui/index.html > /dev/null 2>&1 || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 5
       start_period: 45s
     restart: unless-stopped
 
-  # ── Transaction Service ──────────────────────────────────────────────────────
   transaction-service:
-    build:
-      context: ..
-      dockerfile: services/transaction-service/Dockerfile
+    image: fintechwave/transaction:latest
     container_name: fintechwave-transaction
     environment:
       DB_HOST: postgres-tx
@@ -86,6 +78,9 @@ services:
       DB_NAME: fintechwave_tx
       DB_USER: postgres
       DB_PASS: postgres
+      JWT_SECRET:               ${JWT_SECRET:-change-me-in-production-must-be-256-bits-long!!}
+      JWT_ACCESS_TTL_MINUTES:   ${JWT_ACCESS_TTL_MINUTES:-15}
+      JWT_REFRESH_TTL_DAYS:     ${JWT_REFRESH_TTL_DAYS:-7}
     ports:
       - "8082:8082"
     networks:
@@ -94,7 +89,7 @@ services:
       postgres-tx:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/ > /dev/null 2>&1 || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 5

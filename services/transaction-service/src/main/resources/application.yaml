@@ -28,6 +28,12 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: true
 
+app:
+  jwt:
+    secret: ${JWT_SECRET:dev-secret-change-in-production-must-be-256bits-long!}
+    access-token-ttl-minutes: ${JWT_ACCESS_TTL_MINUTES:15}
+    refresh-token-ttl-days: ${JWT_REFRESH_TTL_DAYS:7}
+
 server:
   port: 8082
   error:

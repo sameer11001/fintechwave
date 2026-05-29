@@ -9,7 +9,7 @@ import com.fintechwave.iam.exception.DuplicateResourceException;
 import com.fintechwave.iam.exception.InvalidCredentialsException;
 import com.fintechwave.iam.mapper.AuthMapper;
 import com.fintechwave.iam.repository.UserRepository;
-import com.fintechwave.iam.security.JwtProvider;
+import com.fintechwave.security.jwt.JwtProvider;
 import com.fintechwave.iam.service.IAuthService;
 import com.fintechwave.iam.service.ITokenService;
 import com.fintechwave.iam.util.HashUtil;

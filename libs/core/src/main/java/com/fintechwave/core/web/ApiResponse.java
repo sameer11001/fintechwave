@@ -1,4 +1,4 @@
-package com.fintechwave.iam.dto.response;
+package com.fintechwave.core.web;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -38,6 +38,14 @@ public class ApiResponse<T> {
         return ApiResponse.<T>builder()
                 .success(true)
                 .data(data)
+                .message(message)
+                .timestamp(LocalDateTime.now())
+                .build();
+    }
+
+    public static <T> ApiResponse<T> noContent(String message) {
+        return ApiResponse.<T>builder()
+                .success(true)
                 .message(message)
                 .timestamp(LocalDateTime.now())
                 .build();

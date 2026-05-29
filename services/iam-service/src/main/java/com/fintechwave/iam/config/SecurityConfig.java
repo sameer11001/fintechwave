@@ -1,6 +1,6 @@
 package com.fintechwave.iam.config;
 
-import com.fintechwave.iam.security.JwtAuthFilter;
+import com.fintechwave.security.filter.JwtAuthFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

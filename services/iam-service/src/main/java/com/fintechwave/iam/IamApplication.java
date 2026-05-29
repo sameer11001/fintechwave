@@ -1,6 +1,6 @@
 package com.fintechwave.iam;
 
-import com.fintechwave.iam.config.JwtProperties;
+import com.fintechwave.security.config.JwtProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
