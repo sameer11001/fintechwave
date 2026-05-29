@@ -2,16 +2,19 @@ package com.fintechwave.iam.mapper;
 
 import com.fintechwave.iam.domain.entity.RefreshToken;
 import com.fintechwave.iam.dto.response.AuthResponse;
-import org.springframework.stereotype.Component;
+import org.mapstruct.Mapper;
+import org.mapstruct.Mapping;
 
-@Component
-public class AuthMapper {
+@Mapper(componentModel = "spring")
+public interface AuthMapper {
 
-    public AuthResponse toAuthResponse(String accessToken, RefreshToken refreshToken) {
-        return AuthResponse.of(accessToken, refreshToken.getToken());
-    }
+    @Mapping(target = "refreshToken", source = "refreshToken.token")
+    @Mapping(target = "tokenType", constant = "Bearer")
+    @Mapping(target = "expiresIn", expression = "java(900L)")
+    AuthResponse toAuthResponse(String accessToken, RefreshToken refreshToken);
 
-    public AuthResponse toAuthResponse(String accessToken, String rawRefreshToken) {
-        return AuthResponse.of(accessToken, rawRefreshToken);
-    }
+    @Mapping(target = "refreshToken", source = "rawRefreshToken")
+    @Mapping(target = "tokenType", constant = "Bearer")
+    @Mapping(target = "expiresIn", expression = "java(900L)")
+    AuthResponse toAuthResponse(String accessToken, String rawRefreshToken);
 }
