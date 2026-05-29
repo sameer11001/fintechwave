@@ -19,7 +19,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
-    restart: unless-stopped
+    restart: no
 
   postgres-tx:
     image: postgres:16-alpine
@@ -40,12 +40,29 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
-    restart: unless-stopped
+    restart: no
+
+  config-server:
+    image: fintechwave/config-server:latest
+    container_name: fintechwave-config-server
+
+    ports:
+      - "8888:8888"
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8888/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
 
   iam-service:
     image: fintechwave/iam:latest
     container_name: fintechwave-iam
     environment:
+      CONFIG_SERVER_URI:        http://config-server:8888
       DB_HOST:                  postgres-iam
       DB_PORT:                  5432
       DB_NAME:                  fintechwave_iam
@@ -61,23 +78,26 @@ services:
     depends_on:
       postgres-iam:
         condition: service_healthy
+      config-server:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8081/swagger-ui/index.html > /dev/null 2>&1 || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 5
       start_period: 45s
-    restart: unless-stopped
+    restart: no
 
   transaction-service:
     image: fintechwave/transaction:latest
     container_name: fintechwave-transaction
     environment:
-      DB_HOST: postgres-tx
-      DB_PORT: 5432
-      DB_NAME: fintechwave_tx
-      DB_USER: postgres
-      DB_PASS: postgres
+      CONFIG_SERVER_URI:        http://config-server:8888
+      DB_HOST:                  postgres-tx
+      DB_PORT:                  5432
+      DB_NAME:                  fintechwave_tx
+      DB_USER:                  postgres
+      DB_PASS:                  postgres
       JWT_SECRET:               ${JWT_SECRET:-change-me-in-production-must-be-256-bits-long!!}
       JWT_ACCESS_TTL_MINUTES:   ${JWT_ACCESS_TTL_MINUTES:-15}
       JWT_REFRESH_TTL_DAYS:     ${JWT_REFRESH_TTL_DAYS:-7}
@@ -88,22 +108,22 @@ services:
     depends_on:
       postgres-tx:
         condition: service_healthy
+      config-server:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8082/ > /dev/null 2>&1 || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 5
       start_period: 45s
-    restart: unless-stopped
+    restart: no
 
-# ── Volumes ───────────────────────────────────────────────────────────────────
 volumes:
   postgres-iam-data:
     driver: local
   postgres-tx-data:
     driver: local
 
-# ── Networks ──────────────────────────────────────────────────────────────────
 networks:
   fintechwave:
     driver: bridge

@@ -1,0 +1,31 @@
+server:
+  port: 8888
+
+spring:
+  application:
+    name: config-server
+
+  cloud:
+    config:
+      server:
+        git:
+          uri: https://github.com/sameer11001/fintechwave-config.git
+          default-label: main
+          clone-on-start: true
+          force-pull: true
+          basedir: /opt/config-cache
+          timeout: 5
+
+management:
+  endpoint:
+    health:
+      show-details: always
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+
+logging:
+  level:
+    org.springframework.cloud.config: INFO
+    com.fintechwave: INFO
