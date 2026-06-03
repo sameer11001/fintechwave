@@ -1359,6 +1359,8 @@ orders.forEach(o -> o.getUser().getName());   // triggers N selects — use JOIN
 // NEVER — Optional.get() without check
 Optional<User> user = userRepository.findById(id);
 user.get().getName();                          // use orElseThrow()
+
+// NEVER — put comments except if required in complex logic or explain business logic just
 ```
 
 ### What to always do

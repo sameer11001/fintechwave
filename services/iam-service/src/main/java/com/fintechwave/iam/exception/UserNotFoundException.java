@@ -4,11 +4,11 @@ import java.util.UUID;
 
 public class UserNotFoundException extends ResourceNotFoundException {
 
-    public UserNotFoundException(UUID id) {
-        super("User not found with id: " + id);
+    public UserNotFoundException(UUID keycloakId) {
+        super("User profile not found for keycloakId: " + keycloakId);
     }
 
     public UserNotFoundException(String email) {
-        super("User not found with email: " + email);
+        super("User profile not found for email: " + email);
     }
 }

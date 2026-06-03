@@ -52,20 +52,6 @@ public class GlobalExceptionHandler {
                                 .body(ApiResponse.error(ex.getErrorCode(), ex.getMessage()));
         }
 
-        @ExceptionHandler(InvalidCredentialsException.class)
-        public ResponseEntity<ApiResponse<Void>> handleInvalidCredentials(InvalidCredentialsException ex) {
-                log.warn("Authentication failure: {}", ex.getMessage());
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                                .body(ApiResponse.error(ex.getErrorCode(), ex.getMessage()));
-        }
-
-        @ExceptionHandler(InvalidTokenException.class)
-        public ResponseEntity<ApiResponse<Void>> handleInvalidToken(InvalidTokenException ex) {
-                log.warn("Token validation failure: {}", ex.getMessage());
-                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                                .body(ApiResponse.error(ex.getErrorCode(), ex.getMessage()));
-        }
-
         @ExceptionHandler(HttpMessageNotReadableException.class)
         public ResponseEntity<ApiResponse<Object>> handleHttpMessageNotReadable(
                         HttpMessageNotReadableException ex) {

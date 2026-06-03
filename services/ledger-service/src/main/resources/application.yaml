@@ -1,0 +1,93 @@
+spring:
+  application:
+    name: ledger-service
+
+  config:
+    import: "configserver:${CONFIG_SERVER_URI:http://localhost:8888}"
+
+  cloud:
+    config:
+      fail-fast: true
+      retry:
+        max-attempts: 6
+        initial-interval: 1000
+        multiplier: 1.5
+        max-interval: 10000
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:fintechwave_ledger}
+    username: ${DB_USER:postgres}
+    password: ${DB_PASS:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        "[format_sql]": false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:29092}
+    consumer:
+      group-id: ledger-service
+      key-deserializer:   org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+    producer:
+      key-serializer:   org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: true
+    listener:
+      ack-mode: MANUAL_IMMEDIATE
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: ${KEYCLOAK_URL:http://localhost:8180}/realms/fintechwave/protocol/openid-connect/certs
+
+server:
+  port: 8083
+  error:
+    include-message: never
+    include-stacktrace: never
+
+app:
+  keycloak:
+    jwk-set-uri: ${KEYCLOAK_URL:http://localhost:8180}/realms/fintechwave/protocol/openid-connect/certs
+    issuer-uri:  ${KEYCLOAK_URL:http://localhost:8180}/realms/fintechwave
+    expected-audience: fintechwave-platform
+    
+management:
+  endpoint:
+    health:
+      show-details: always
+  endpoints:
+    web:
+      exposure:
+        include: health, info
+
+logging:
+  level:
+    "[com.fintechwave.ledger]": DEBUG
+    "[org.springframework.security]": INFO
+    "[org.springframework.kafka]": INFO
+    "[org.springframework.cloud.config]": INFO

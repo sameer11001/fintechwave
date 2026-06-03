@@ -558,7 +558,7 @@ mvn compile jib:build -Dimage.tag=1.2.0
 
 ```bash
 # Start the full local stack:
-# PostgreSQL, Kafka, Zookeeper, Redis, all microservices, Gateway
+# PostgreSQL, Kafka (KRaft), Redis, all microservices, Gateway
 cd docker
 docker compose up -d
 

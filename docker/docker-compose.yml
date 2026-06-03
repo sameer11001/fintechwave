@@ -1,51 +1,64 @@
 services:
 
-  postgres-iam:
+  postgres:
     image: postgres:16-alpine
-    container_name: fintechwave-postgres-iam
+    container_name: fintechwave-postgres
     environment:
-      POSTGRES_DB:       fintechwave_iam
       POSTGRES_USER:     postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${DB_PASS:-postgres}
+      POSTGRES_DB:       postgres         
     ports:
-      - "5433:5432"
+      - "5432:5432"
     volumes:
-      - postgres-iam-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     networks:
       - fintechwave
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d fintechwave_iam"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
     restart: no
 
-  postgres-tx:
-    image: postgres:16-alpine
-    container_name: fintechwave-postgres-tx
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.2
+    container_name: fintechwave-keycloak
+    command: start-dev
     environment:
-      POSTGRES_DB:       fintechwave_tx
-      POSTGRES_USER:     postgres
-      POSTGRES_PASSWORD: postgres
+      KC_DB:                    postgres
+      KC_DB_URL:                jdbc:postgresql://postgres:5432/keycloak_db
+      KC_DB_USERNAME:           postgres
+      KC_DB_PASSWORD:           ${DB_PASS:-postgres}
+      KEYCLOAK_ADMIN:           ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD:  ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HTTP_PORT:             8080
+      KC_HOSTNAME_STRICT:       "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_SPI_EVENTSLISTENER_WEBHOOK_URL: "http://host.docker.internal:8081/api/v1/internal/webhook/keycloak/user-registered"
     ports:
-      - "5434:5432"
+      - "8180:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - postgres-tx-data:/var/lib/postgresql/data
+      - ./keycloak/providers:/opt/keycloak/providers
     networks:
       - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d fintechwave_tx"]
-      interval: 10s
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080;echo -e 'GET /realms/master HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n' >&3;grep -q '200 OK' <&3"]
+      interval: 20s
       timeout: 5s
-      retries: 5
-      start_period: 15s
+      retries: 10
+      start_period: 60s
     restart: no
 
   config-server:
     image: fintechwave/config-server:latest
     container_name: fintechwave-config-server
-
     ports:
       - "8888:8888"
     networks:
@@ -58,30 +71,166 @@ services:
       start_period: 45s
     restart: no
 
-  iam-service:
-    image: fintechwave/iam:latest
-    container_name: fintechwave-iam
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: fintechwave-kafka
     environment:
-      CONFIG_SERVER_URI:        http://config-server:8888
-      DB_HOST:                  postgres-iam
-      DB_PORT:                  5432
-      DB_NAME:                  fintechwave_iam
-      DB_USER:                  postgres
-      DB_PASS:                  postgres
-      JWT_SECRET:               ${JWT_SECRET:-change-me-in-production-must-be-256-bits-long!!}
-      JWT_ACCESS_TTL_MINUTES:   ${JWT_ACCESS_TTL_MINUTES:-15}
-      JWT_REFRESH_TTL_DAYS:     ${JWT_REFRESH_TTL_DAYS:-7}
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+    ports:
+      - "29092:29092"
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: no
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: fintechwave-redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: no
+
+  minio:
+    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    container_name: fintechwave-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: no
+
+  # ─── Application Services ─────────────────────────────────────────────────
+
+  user-service:
+    image: fintechwave/user-service:latest
+    container_name: fintechwave-user
+    environment:
+      CONFIG_SERVER_URI:   http://config-server:8888
+      DB_HOST:             postgres
+      DB_PORT:             5432
+      DB_NAME:             fintechwave_iam
+      DB_USER:             postgres
+      DB_PASS:             ${DB_PASS:-postgres}
+      KEYCLOAK_URL:        http://keycloak:8080
+      KAFKA_BOOTSTRAP:     kafka:9092
     ports:
       - "8081:8081"
     networks:
       - fintechwave
     depends_on:
-      postgres-iam:
+      postgres:
         condition: service_healthy
       config-server:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/swagger-ui/index.html > /dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+  kyc-service:
+    image: fintechwave/kyc-service:latest
+    container_name: fintechwave-kyc
+    environment:
+      CONFIG_SERVER_URI:   http://config-server:8888
+      DB_HOST:             postgres
+      DB_PORT:             5432
+      DB_NAME:             fintechwave_kyc
+      DB_USER:             postgres
+      DB_PASS:             ${DB_PASS:-postgres}
+      KEYCLOAK_URL:        http://keycloak:8080
+      KAFKA_BOOTSTRAP:     kafka:9092
+      MINIO_ENDPOINT:      http://minio:9000
+      MINIO_ACCESS_KEY:    ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY:    ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "8082:8082"
+    networks:
+      - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+  ledger-service:
+    image: fintechwave/ledger-service:latest
+    container_name: fintechwave-ledger
+    environment:
+      CONFIG_SERVER_URI:   http://config-server:8888
+      DB_HOST:             postgres
+      DB_PORT:             5432
+      DB_NAME:             fintechwave_ledger
+      DB_USER:             postgres
+      DB_PASS:             ${DB_PASS:-postgres}
+      KEYCLOAK_URL:        http://keycloak:8080
+      KAFKA_BOOTSTRAP:     kafka:9092
+    ports:
+      - "8083:8083"
+    networks:
+      - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/actuator/health > /dev/null 2>&1 || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 5
@@ -89,29 +238,32 @@ services:
     restart: no
 
   transaction-service:
-    image: fintechwave/transaction:latest
+    image: fintechwave/transaction-service:latest
     container_name: fintechwave-transaction
     environment:
-      CONFIG_SERVER_URI:        http://config-server:8888
-      DB_HOST:                  postgres-tx
-      DB_PORT:                  5432
-      DB_NAME:                  fintechwave_tx
-      DB_USER:                  postgres
-      DB_PASS:                  postgres
-      JWT_SECRET:               ${JWT_SECRET:-change-me-in-production-must-be-256-bits-long!!}
-      JWT_ACCESS_TTL_MINUTES:   ${JWT_ACCESS_TTL_MINUTES:-15}
-      JWT_REFRESH_TTL_DAYS:     ${JWT_REFRESH_TTL_DAYS:-7}
+      CONFIG_SERVER_URI:       http://config-server:8888
+      DB_HOST:                 postgres
+      DB_PORT:                 5432
+      DB_NAME:                 fintechwave_tx
+      DB_USER:                 postgres
+      DB_PASS:                 ${DB_PASS:-postgres}
+      KEYCLOAK_URL:            http://keycloak:8080
+      KAFKA_BOOTSTRAP:         kafka:9092
+      STRIPE_API_KEY:          ${STRIPE_API_KEY:-sk_test_placeholder}
+      STRIPE_WEBHOOK_SECRET:   ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}
     ports:
-      - "8082:8082"
+      - "8084:8084"
     networks:
       - fintechwave
     depends_on:
-      postgres-tx:
+      postgres:
         condition: service_healthy
       config-server:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/ > /dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/actuator/health > /dev/null 2>&1 || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 5
@@ -119,10 +271,8 @@ services:
     restart: no
 
 volumes:
-  postgres-iam-data:
-    driver: local
-  postgres-tx-data:
-    driver: local
+  postgres-data:
+  minio-data:
 
 networks:
   fintechwave:

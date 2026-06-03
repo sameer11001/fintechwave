@@ -90,6 +90,11 @@
             <plugin>
                 <groupId>com.google.cloud.tools</groupId>
                 <artifactId>jib-maven-plugin</artifactId>
+                <configuration>
+                    <to>
+                        <image>fintechwave/transaction-service:${image.tag}</image>
+                    </to>
+                </configuration>
             </plugin>
         </plugins>
     </build>
