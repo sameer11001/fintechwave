@@ -14,6 +14,26 @@ spring:
         multiplier: 1.5
         max-interval: 10000
 
+    gateway:
+      server:
+        webflux:
+          httpclient:
+            connect-timeout: 1000
+            response-timeout: 10s
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      connect-timeout: 2s
+      timeout: 1s
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: "${KEYCLOAK_URL:http://localhost:8180}/realms/fintechwave/protocol/openid-connect/certs"
+
 server:
   port: 8080
 
@@ -21,13 +41,38 @@ management:
   endpoint:
     health:
       show-details: always
+    gateway:
+      access: unrestricted
   endpoints:
     web:
       exposure:
-        include: health, info
+        include: "*"
+  info:
+    env:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+info:
+  app:
+    name: "gateway"
+    description: "FintechWave API Gateway — single entry point for all microservices"
+    version: "1.0.0"
 
 logging:
   level:
     "[org.springframework.cloud.gateway]": INFO
     "[org.springframework.cloud.config]": INFO
-    "[com.fintechwave]": INFO
+    "[com.fintechwave]": DEBUG
+  pattern:
+    level: "%5p [${spring.application.name},%X{traceId},%X{spanId}]"
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        slidingWindowSize: 10
+        permittedNumberOfCallsInHalfOpenState: 2
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10000

@@ -1,620 +1,524 @@
-# FintechWave — Engineering Reference
+# FintechWave — E-Money Platform
 
-> **Classification:** Internal Engineering Documentation
-> **Maintained by:** Platform Engineering
-> **Status:** Active Development
+FintechWave is a production-grade, event-driven **e-money platform** built on a Java/Spring Boot microservices architecture. It enables custodial e-wallet management, tiered KYC onboarding, double-entry bookkeeping, and Stripe-powered payment flows within a secure, containerised ecosystem.
 
 ---
 
 ## Table of Contents
 
-1. [Overview](#1-overview)
-2. [System Architecture](#2-system-architecture)
-3. [Bounded Contexts & Roadmap](#3-bounded-contexts--roadmap)
-4. [Database Design Strategy](#4-database-design-strategy)
-5. [Event-Driven Architecture](#5-event-driven-architecture)
-6. [Security Model](#6-security-model)
-7. [Scalability & Infrastructure](#7-scalability--infrastructure)
-8. [Observability](#8-observability)
-9. [Testing Strategy](#9-testing-strategy)
-10. [Build & Local Development](#10-build--local-development)
-11. [Engineering Standards](#11-engineering-standards)
+1. [High-Level Architecture](#1-high-level-architecture)
+2. [Repository Layout](#2-repository-layout)
+3. [Platform Layer](#3-platform-layer)
+4. [Shared Libraries](#4-shared-libraries)
+5. [Service Catalogue](#5-service-catalogue)
+   - [IAM / User Service](#51-iam--user-service-port-8081)
+   - [KYC Service](#52-kyc-service-port-8082)
+   - [Ledger Service](#53-ledger-service-port-8083)
+   - [Transaction Service](#54-transaction-service-port-8084)
+   - [Fraud Service](#55-fraud-service-port-8085)
+   - [Notification Service](#56-notification-service-port-8086)
+   - [Reporting Service](#57-reporting-service-port-8087)
+6. [Security Architecture](#6-security-architecture)
+7. [Event-Driven Messaging — Transactional Outbox](#7-event-driven-messaging--transactional-outbox)
+8. [Financial Engine — Double-Entry Bookkeeping](#8-financial-engine--double-entry-bookkeeping)
+9. [Stripe Payment Integration](#9-stripe-payment-integration)
+10. [KYC Lifecycle State Machine](#10-kyc-lifecycle-state-machine)
+11. [User Registration Flow (End-to-End)](#11-user-registration-flow-end-to-end)
+12. [Infrastructure & Data Stores](#12-infrastructure--data-stores)
+13. [Technology Stack](#13-technology-stack)
+14. [Port Reference](#14-port-reference)
 
 ---
 
-## 1. Overview
+## 1. High-Level Architecture
 
-**FintechWave** is a production-grade, distributed e-wallet platform engineered for high throughput, strict financial consistency, and regulatory compliance. The system is designed around six Domain-Driven Design (DDD) bounded contexts, each implemented as an independent microservice with its own isolated database, communication contract, and deployment lifecycle.
+```
+Client Applications
+        │  Bearer JWT (Keycloak)
+        ▼
+┌───────────────────┐
+│   API Gateway     │  Spring Cloud Gateway — JWT validation, routing
+│   (port 8080)     │
+└────────┬──────────┘
+         │  Internal HTTP (no re-auth required)
+    ┌────┴──────────────────────────────────────┐
+    │                                           │
+    ▼                                           ▼
+┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────────┐   ┌──────────┐   ┌──────────────┐   ┌──────────┐
+│  IAM /   │   │  KYC     │   │  Ledger  │   │  Transaction     │   │  Fraud   │   │ Notification │   │ Reporting│
+│  User    │   │  Service │   │  Service │   │  Service         │   │  Service │   │  Service     │   │  Service │
+│  :8081   │   │  :8082   │   │  :8083   │   │  :8084           │   │  :8085   │   │  :8086       │   │  :8087   │
+└────┬─────┘   └────┬─────┘   └────┬─────┘   └────────┬─────────┘   └────┬─────┘   └──────┬───────┘   └────┬─────┘
+     │              │              │                   │                 │                │                │
+     └──────────────┴──────────────┴───────────────────┴─────────────────┴────────────────┴────────────────┘
+                             │  Apache Kafka (KRaft mode)
+                    Domain Events (Outbox Pattern)
+                             │
+                  ┌──────────┴──────────┐
+                  │                     │
+              PostgreSQL            Keycloak
+          (one DB per service)    (Identity Provider)
+                                       │
+                                   MinIO (S3)
+                                 (KYC Documents)
+```
 
-### Business Model
-
-| Revenue Stream | Mechanism |
-|---|---|
-| Merchant Discount Rate (MDR) | Fee recorded per merchant-side transaction commit |
-| Transfer & Withdrawal Fees | Flat or percentage-based fee ledger entries |
-| Cross-Border Remittance | Spread captured on FX conversion at payout |
-| VAS Commissions | Commission entries on third-party service settlement |
-| Float Interest | Interest accrued on pooled user balances (treasury) |
-
-### Core Non-Negotiables
-
-Every bug is a potential money loss. Every race condition is financial corruption. Every missed event is state divergence. These are not abstract concerns — they are hard system invariants that every line of code must respect:
-
-- **PostgreSQL is the sole source of truth.** Redis, Kafka, and in-memory state are never authoritative.
-- **The Outbox pattern is non-negotiable.** Domain state mutation and event publication must share one ACID transaction boundary. No exceptions.
-- **All mutations are idempotent.** Retry storms and duplicate Kafka deliveries must produce no side effects.
-- **No money is ever destroyed.** Double-entry bookkeeping ensures every debit has a corresponding credit. Records are never deleted; errors are corrected through reversing journal entries.
+All inter-service communication is **asynchronous via Kafka**. Services never call each other over HTTP at runtime. Consistency is achieved through the **Transactional Outbox Pattern**.
 
 ---
 
-## 2. System Architecture
-
-### Module Layout
+## 2. Repository Layout
 
 ```
 fintechwave/
-├── platform/
-│   └── gateway/                  # Spring Cloud Gateway — single ingress point
-├── services/
-│   ├── iam-service/              # Identity, Authentication, Authorization
-│   └── transaction-service/      # Transaction orchestration, ledger commits
-├── libs/
-│   ├── common/                   # BOM — version governance for the ecosystem
-│   ├── core/                     # Shared ApiResponse, exceptions, utilities
-│   ├── security/                 # Custom security auto-configuration starter
-│   └── events/                   # Kafka event schemas and Outbox contracts
-├── docker/                       # Docker Compose for local development
-├── infra/                        # Kubernetes manifests and Helm charts
-└── scripts/                      # CI/CD and operational tooling
-```
-
-### Shared Libraries
-
-| Module | Role |
-|---|---|
-| `libs/common` | BOM artifact. Centralizes all dependency versions. Every service imports this as a BOM import — no version is declared outside it. |
-| `libs/core` | `ApiResponse<T>` envelope, `GlobalExceptionHandler`, `BaseServiceException` hierarchy. Eliminates response-structure drift across services. |
-| `libs/security` | Spring Boot auto-configuration starter for JWT filter, `SecurityFilterChain`, and zero-trust defaults. Services inherit security policy without duplication. |
-| `libs/events` | Versioned Kafka event POJOs with schema contracts (eventId, eventType, version, occurredAt). All producers and consumers share this artifact. |
-
-### Dependency Flow Rule
-
-```
-Controller → Service Interface → Repository
-                  ↓
-             Domain (Entity, Enum)
-                  ↓
-             DTO (Request / Response)
-```
-
-No layer may import from a layer above it. Controllers never touch repositories. Entities never appear in controller signatures.
-
----
-
-## 3. Bounded Contexts & Roadmap
-
-### 3.1 Identity & Access Management (IAM) — `iam-service`
-**Current Status:** Active
-
-Owns the user identity lifecycle: registration, credential management, JWT issuance, token refresh rotation, and role-based access control.
-
-**Key Responsibilities:**
-- Stateless JWT authentication (access + refresh token pair)
-- BCrypt password hashing with configurable cost factor
-- Refresh token rotation on every use — previous token immediately invalidated
-- `ROLE_USER`, `ROLE_ADMIN`, `ROLE_MERCHANT` RBAC model
-
-**Roadmap:**
-- OAuth 2.0 / OIDC integration (Authorization Server via Spring Authorization Server)
-- Device fingerprinting and session anomaly detection
-- Passkey / WebAuthn support for passwordless authentication
-- Privileged access management (PAM) for internal operator roles
-
----
-
-### 3.2 Onboarding & KYC — _(Planned)_
-**Current Status:** Roadmap — Phase 2
-
-Manages the user lifecycle from initial sign-up through regulatory verification. This context owns all PII data for the onboarding flow and is the only service permitted to store raw identity documents.
-
-**Key Responsibilities:**
-- Tiered KYC levels (Tier 1: phone/email, Tier 2: national ID, Tier 3: facial biometric)
-- Document ingestion and secure storage (encrypted at rest, AES-256)
-- Integration with third-party KYC providers (e.g., Smile Identity, Jumio)
-- Regulatory hold management (emits `KYCVerified` / `KYCRejected` events)
-
-**Critical Event:** `KYCVerified` — consumed by the Ledger service to provision the user wallet. Without this event, no financial account is created. This is an intentional compliance gate.
-
-**Roadmap:**
-- AML (Anti-Money Laundering) screening at registration and on periodic schedule
-- Automated re-verification triggers for high-risk profile changes
-- Regulatory reporting hooks for FATF compliance
-
----
-
-### 3.3 Core Ledger & Wallet — _(Planned)_
-**Current Status:** Roadmap — Phase 2 (Critical Path)
-
-The financial heart of the platform. This service implements double-entry bookkeeping and is the only authority on account balances. It is engineered for strict ACID compliance and auditability above all else.
-
-**Database Schema (Double-Entry):**
-
-```sql
--- Chart of accounts: ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE
-CREATE TABLE ledger_account (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    owner_id      UUID NOT NULL,          -- FK to user or system account
-    account_type  VARCHAR(20) NOT NULL,   -- ASSET | LIABILITY | EQUITY
-    currency      CHAR(3) NOT NULL,
-    status        VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Immutable journal. Never deleted. Errors corrected via reversing entries.
-CREATE TABLE ledger_entry (
-    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    transaction_id   UUID NOT NULL,       -- groups the debit+credit pair
-    account_id       UUID NOT NULL REFERENCES ledger_account(id),
-    entry_type       CHAR(6) NOT NULL,    -- DEBIT | CREDIT
-    amount           NUMERIC(19,4) NOT NULL CHECK (amount > 0),
-    currency         CHAR(3) NOT NULL,
-    idempotency_key  UUID NOT NULL UNIQUE,
-    description      TEXT,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Materialized running balance — updated within the same transaction as ledger_entry
-CREATE TABLE balance (
-    account_id    UUID PRIMARY KEY REFERENCES ledger_account(id),
-    amount        NUMERIC(19,4) NOT NULL DEFAULT 0 CHECK (amount >= 0),
-    currency      CHAR(3) NOT NULL,
-    version       BIGINT NOT NULL DEFAULT 0,  -- optimistic locking
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Indexes
-CREATE INDEX idx_ledger_entry_transaction_id ON ledger_entry(transaction_id);
-CREATE INDEX idx_ledger_entry_account_id     ON ledger_entry(account_id);
-CREATE INDEX idx_ledger_account_owner_id     ON ledger_account(owner_id);
-```
-
-**Invariants:**
-- `SUM(DEBIT) = SUM(CREDIT)` for every `transaction_id` — enforced at commit time
-- Balance can never go negative: `CHECK (amount >= 0)` enforced in DB, not only in application code
-- Pessimistic locking (`SELECT FOR UPDATE`) on `balance` rows during any write operation to prevent concurrent overdraft
-
-**Roadmap:**
-- Multi-currency balance support with FX rate recording at entry time
-- Float interest calculation engine (daily accrual, monthly settlement)
-- Reconciliation job for balance-to-entry divergence detection
-
----
-
-### 3.4 Transaction & Money Movement — `transaction-service`
-**Current Status:** Active (core scaffolding)
-
-Orchestrates all financial operations: P2P transfers, cash-in (deposit), cash-out (withdrawal), and fee calculation. This service owns transaction intent and state machine transitions, but delegates all ledger mutations to the Ledger service.
-
-**Transaction State Machine:**
-```
-INITIATED → FRAUD_CHECK → RESERVED → COMMITTED → COMPLETED
-                 ↓                         ↓
-            FLAGGED                    FAILED → REVERSED
-```
-
-**Key Responsibilities:**
-- Fee matrix computation (MDR, flat fees, FX spread)
-- Payment gateway integration (Stripe, local payment networks)
-- Outbox-based event emission (`TransferInitiated`, `FundsReserved`, `TransferCompleted`)
-
-**Roadmap:**
-- Scheduled recurring transfers (direct debit)
-- Cross-border remittance corridor management
-- Refund and chargeback orchestration
-- Merchant settlement batch processing
-
----
-
-### 3.5 Fraud & Risk Management — _(Planned)_
-**Current Status:** Roadmap — Phase 3
-
-A reactive and proactive risk evaluation engine. It subscribes to transaction events, scores them in near-real-time, and emits decisions that the Transaction service uses to allow or block operations.
-
-**Key Responsibilities:**
-- Velocity checks (transaction count and volume per time window, via Redis)
-- Geolocation anomaly detection (impossible travel detection)
-- Device fingerprint and behavioral scoring
-- Rule engine (configurable fraud rules stored in DB, hot-reloaded)
-
-**Critical Event Flow:**
-`TransferInitiated` → FraudService evaluates → emits `TransactionApproved` or `TransactionFlagged`
-
-**Roadmap:**
-- ML-based transaction scoring model integration
-- Account freeze workflow (`AccountFrozen` event with cross-service enforcement)
-- Regulatory STR (Suspicious Transaction Report) automated filing hooks
-
----
-
-### 3.6 Notifications & Engagement — _(Planned)_
-**Current Status:** Roadmap — Phase 3
-
-A stateless notification delivery service. It subscribes to domain events from all other contexts and delivers user-facing notifications through push, SMS, and email channels.
-
-**Key Responsibilities:**
-- Multi-channel delivery: push (FCM/APNs), SMS (Twilio), Email (SendGrid)
-- Idempotent delivery: notification log with `idempotency_key` prevents duplicate sends
-- User preference management (opt-in/out per channel per event type)
-- Delivery status tracking and retry management
-
-**Roadmap:**
-- In-app notification feed (WebSocket / SSE)
-- Templating engine for localized, dynamic notification content
-- Marketing engagement campaigns (separated from transactional notifications by design)
-
----
-
-## 4. Database Design Strategy
-
-### Isolation Model
-
-Each bounded context owns a dedicated database. No service may issue a query against another service's database. Cross-context data access is exclusively through published domain events or REST API calls.
-
-| Context | Database | Isolation Rationale |
-|---|---|---|
-| IAM | `iam_db` | Credential data must never co-reside with financial data |
-| KYC | `kyc_db` | PII document store requires dedicated encryption and access policies |
-| Ledger | `ledger_db` | Financial records require dedicated IOPS, backup, and retention policy |
-| Transaction | `transaction_db` | High-write workload — sharding strategy applied independently |
-| Fraud | `fraud_db` | Rule store and scoring history have independent retention and purge needs |
-| Notifications | `notification_db` | Delivery log has high-volume, time-bound retention (90-day rolling) |
-
-### Retention & Archival Policy
-
-| Context | Hot Storage | Archive Trigger | Archive Target |
-|---|---|---|---|
-| Ledger Entries | Indefinite (immutable by law) | Never purged | Append-only replicas |
-| Transactions | 3 years | Older than 3 years | AWS S3 Parquet |
-| KYC Documents | Duration of customer relationship + 7 years | Regulatory window | Encrypted cold storage |
-| Notification Logs | 90 days rolling | TTL-based partition drop | None required |
-| Fraud Scoring | 2 years | Age-based archival | S3 |
-
----
-
-## 5. Event-Driven Architecture
-
-### Message Broker: Apache Kafka
-
-Kafka is selected over RabbitMQ for the following reasons specific to FintechWave's requirements:
-
-| Requirement | Kafka | RabbitMQ |
-|---|---|---|
-| Event ordering per wallet | ✅ Partition-key ordering | ❌ Queue-level only |
-| Long-term event log retention | ✅ Configurable retention | ❌ Messages are consumed and dropped |
-| Replay for Ledger audit | ✅ Offset-based replay | ❌ Not supported |
-| Throughput at 10K+ TPS | ✅ Designed for this | ⚠️ Requires significant tuning |
-
-### Topic & Partition Strategy
-
-```
-Topic                   Partition Key         Retention
-──────────────────────  ────────────────────  ──────────
-iam.user-events         user_id               30 days
-kyc.verification-events user_id               90 days
-ledger.wallet-events    wallet_id             1 year
-tx.transaction-events   transaction_id        1 year
-fraud.risk-events       transaction_id        1 year
-notification.events     user_id               7 days
-```
-
-Partitioning by `wallet_id` and `transaction_id` guarantees that all events for a single financial entity are processed in strict order within a single partition.
-
-### Domain Event Schema Contract
-
-All events published to Kafka must conform to this envelope. This is enforced by the `libs/events` shared module:
-
-```json
-{
-  "eventId":       "uuid-v4",
-  "eventType":     "TRANSFER_INITIATED",
-  "eventVersion":  1,
-  "aggregateId":   "uuid-of-the-aggregate",
-  "aggregateType": "TRANSACTION",
-  "occurredAt":    "2025-01-15T10:30:00Z",
-  "idempotencyKey":"uuid-v4",
-  "payload":       { }
-}
-```
-
-### Critical Workflow: P2P Transfer
-
-```
-User → Gateway → TransactionService
-                      │
-                      ├─ Validate limits & balance (sync DB read)
-                      ├─ Persist TransactionRecord (status=INITIATED)
-                      ├─ Write OutboxEvent (TransferInitiated)
-                      └─ COMMIT ─────────────────────────────────────────────┐
-                                                                              │
-              Outbox Relay polls and publishes to Kafka                       │
-                      │                                                       │
-                      ▼                                                       │
-              FraudService consumes TransferInitiated                         │
-                      │                                                       │
-              ┌───────┴────────┐                                              │
-              ▼                ▼                                              │
-     Emits TransactionApproved  Emits TransactionFlagged                      │
-              │                        │                                      │
-              ▼                        ▼                                      │
-     LedgerService commits      TransactionService → status=FLAGGED           │
-     double-entry entries        NotificationService → alert user             │
-              │
-     Emits LedgerEntryCommitted
-              │
-     TransactionService → status=COMPLETED
-              │
-     NotificationService → confirmation to both parties
-```
-
-### Idempotency at Consumer Level
-
-Every Kafka consumer persists the `idempotencyKey` from the event envelope into a `processed_events` table within the same transaction as its state mutation. Duplicate events are detected with a unique index and silently discarded.
-
-### Dead Letter Queue Strategy
-
-Failed messages (after 3 retry attempts with exponential backoff) are routed to a DLQ topic (`*.dlq` convention). An operator dashboard provides tooling for inspecting, replaying, or discarding poisoned messages. No message is silently lost.
-
----
-
-## 6. Security Model
-
-### Zero-Trust Principles
-
-- **No service trusts another by default.** All inter-service calls are authenticated.
-- **No session state.** JWTs are stateless; revocation is handled via a Redis-backed short-TTL blocklist.
-- **No PII is ever logged.** Emails, phone numbers, national IDs, and JWT claims are masked at the logging layer.
-- **No secrets in code or version control.** All credentials are injected via environment variables or Kubernetes Secrets.
-
-### Authentication & Authorization
-
-| Layer | Mechanism |
-|---|---|
-| External clients → Gateway | JWT Bearer token (RS256 signed) |
-| Gateway → Services | mTLS (enforced via Istio Service Mesh) |
-| Service → Service (sync) | Feign client with propagated JWT context |
-| RBAC | `@PreAuthorize` annotations on controller methods |
-
-### Data Protection
-
-| Concern | Control |
-|---|---|
-| Data in transit | TLS 1.3 for all external communication; mTLS between services |
-| Data at rest (PII) | AES-256 column-level encryption for identity fields |
-| Card / payment data | Tokenization only — raw card data never stored (PCI-DSS) |
-| Secrets management | Kubernetes Secrets + HashiCorp Vault (production) |
-
-### API Security Controls
-
-- **Rate Limiting:** Token-bucket algorithm enforced at the Gateway per `user_id` and `IP`
-- **Request Signing:** High-value mutation endpoints (transfers, withdrawals) require HMAC request signatures
-- **Webhook Validation:** Stripe callbacks validated via `Stripe-Signature` header before any processing
-- **Audit Trail:** All financial operations produce an immutable audit log entry. Audit records are write-only.
-
----
-
-## 7. Scalability & Infrastructure
-
-### Service Scalability
-
-All Spring Boot microservices are stateless. Horizontal scaling is achieved by increasing pod replicas behind a Kubernetes Service. No in-memory state is permitted.
-
-### Database Scaling Plan
-
-| Context | Strategy |
-|---|---|
-| IAM | Primary + 2 read replicas (via PgBouncer) |
-| Ledger | Primary + read replicas + hash-range sharding by `wallet_id` for 10K+ TPS |
-| Transaction | Partitioned tables by `created_at` month; archived partitions detached quarterly |
-| Fraud | Read replicas + Redis for velocity-check counters (short TTL) |
-
-### Caching Strategy (Redis)
-
-| Cache | TTL | Invalidation |
-|---|---|---|
-| JWT blocklist | Matches token expiry | Explicit on logout / compromise |
-| User balance (read cache) | 500ms | Event-driven on `LedgerEntryCommitted` |
-| Fraud velocity counters | Sliding window (60s, 1h, 24h) | TTL-based expiry |
-| KYC status | 5 minutes | Event-driven on `KYCVerified` / `KYCRejected` |
-
-> **Critical:** Redis is never authoritative. A Redis cache miss must always fall back to PostgreSQL. A Redis eviction must never produce a user-visible balance discrepancy.
-
-### Auto-Scaling Triggers (KEDA)
-
-- **CPU > 70%** → scale up transaction-service pods
-- **Kafka consumer lag > 1000 messages** → scale up the lagging consumer group
-- **Request rate > 5000 req/s** → scale up gateway replicas
-
-### Resilience Patterns
-
-| Pattern | Implementation | Applied To |
-|---|---|---|
-| Circuit Breaker | Resilience4j | All Feign inter-service clients |
-| Bulkhead | Separate HikariCP pools | Ledger DB isolated from other service DB pools |
-| Retry with Backoff | Resilience4j | External gateway calls (Stripe, KYC providers) |
-| Timeout | Feign + Resilience4j | All synchronous calls — max 3s enforced |
-
----
-
-## 8. Observability
-
-### Three Pillars
-
-**Metrics (Prometheus + Grafana):**
-- Business: TPS, MDR collected per minute, P2P transfer volume, failed transaction rate
-- Technical: JVM heap, GC pause, HikariCP pool utilization, Kafka consumer lag
-- Alerting: PagerDuty escalation on > 1% failed transactions, > 5s ledger commit latency, > 10,000 Kafka DLQ messages
-
-**Distributed Tracing (OpenTelemetry):**
-- `trace_id` injected at the Gateway on every inbound request
-- Propagated through all synchronous Feign calls via HTTP headers
-- Propagated through Kafka events via message headers
-- Stored in Grafana Tempo or Jaeger
-
-**Log Aggregation (Grafana Loki / ELK):**
-- Structured JSON logging via Logback
-- MDC context: `requestId`, `userId`, `tenantId`, `traceId` attached to every log line
-- Log levels: `ERROR` for unexpected failures, `WARN` for business-rule violations, `INFO` for state changes, `DEBUG` off in production
-
-### Health Checks
-
-Every service exposes Spring Boot Actuator endpoints consumed by Kubernetes:
-
-```yaml
-livenessProbe:
-  httpGet:
-    path: /actuator/health/liveness
-    port: 8080
-  initialDelaySeconds: 30
-  periodSeconds: 10
-
-readinessProbe:
-  httpGet:
-    path: /actuator/health/readiness
-    port: 8080
-  initialDelaySeconds: 20
-  periodSeconds: 5
+├── libs/                      # Shared Java libraries (Maven artifacts)
+│   ├── common/                # Bill-of-materials POM (dependency versions)
+│   ├── core/                  # ApiResponse wrapper, BaseServiceException
+│   ├── security/              # Keycloak JWT converter, AudienceValidator
+│   ├── events/                # DomainEvent interface, BaseEvent, publisher
+│   └── payment-gateway/       # PaymentGatewayPort interface, Money, DTOs
+│
+├── platform/                  # Infrastructure services
+│   ├── config-server/         # Spring Cloud Config Server (Git-backed)
+│   └── gateway/               # Spring Cloud Gateway (routing + JWT gate)
+│
+├── services/                  # Business domain microservices
+│   ├── user-service/           # User profiles + Keycloak webhook receiver
+│   ├── kyc-service/           # KYC onboarding, document management
+│   ├── ledger-service/        # Double-entry bookkeeping, wallet balances
+│   ├── transaction-service/   # P2P, Cash-in, Cash-out, Stripe integration
+│   ├── fraud-service/         # Risk engine, velocity checks, rules
+│   ├── notification-service/  # Multi-channel alerts (Email, SMS, Push)
+│   └── reporting-service/     # CQRS read models, dashboards
+│
+├── docker/
+│   ├── docker-compose.yml     # Full local dev stack
+│   ├── keycloak/              # Keycloak realm export & webhook provider JAR
+│   └── postgres-init/         # Database initialisation scripts
+│
+└── pom.xml                    # Root Maven aggregator (Java 21, Spring Boot 3.5)
 ```
 
 ---
 
-## 9. Testing Strategy
+## 3. Platform Layer
 
-### Pyramid Targets
+### Spring Cloud Config Server (port 8888)
 
-| Layer | Coverage Target | Framework |
-|---|---|---|
-| Unit (service logic) | ≥ 80% branch | JUnit 5, Mockito |
-| Integration (web layer) | All endpoints | `@WebMvcTest`, MockMvc |
-| Repository (real DB) | All custom queries | `@DataJpaTest` + Testcontainers |
-| Full integration | Critical flows | `@SpringBootTest` + Testcontainers |
-| Contract | All Feign clients | Pact |
-| Load | Ledger TPS target | Gatling |
-| Chaos | Resilience patterns | Gremlin / Chaos Monkey |
+The Config Server is the **single source of truth for all application configuration**. On startup it clones `https://github.com/sameer11001/fintechwave-config.git` and serves property files over HTTP. Every microservice includes `spring-cloud-starter-config` and sets `spring.config.import=configserver:` in its bootstrap phase. If the Config Server is unavailable, services fail fast rather than starting with stale or default config. `spring-retry` is included in every service to allow the initial connection to be retried with back-off during container startup ordering delays.
 
-### Hard Rules
+### API Gateway (Spring Cloud Gateway, WebFlux)
 
-- **No H2.** All database tests run against a real PostgreSQL instance via Testcontainers. H2 behavioral differences have caused production ledger bugs.
-- **No shared mutable state between tests.** Each test manages its own data lifecycle.
-- **No order-dependent tests.** Test suites must pass in any execution order.
-- **Ledger correctness is mandatory coverage.** Double-entry balance integrity, concurrent transfer safety, and idempotency under retry are required test scenarios — not optional.
+The Gateway is the **sole entry point** for all external traffic. It performs:
 
-### Test Naming Convention
+- **JWT Validation** — Uses `NimbusReactiveJwtDecoder` to validate tokens against Keycloak's JWK Set URI before any request reaches a downstream service. Unauthenticated requests are rejected at this layer with `401 Unauthorized`.
+- **Route proxying** — Forwards validated requests to the correct internal service based on path prefix.
+- **Webhook pass-through** — `/api/v1/internal/webhook/**` and `/api/v1/webhooks/**` are permitted without authentication to allow Keycloak and Stripe to deliver events.
+- **Actuator exposure** — `/actuator/health` and `/actuator/info` are open for container health checks.
+
+---
+
+## 4. Shared Libraries
+
+Libraries are built as Maven JAR artifacts and declared as dependencies in each service's `pom.xml`. They are versioned alongside the monorepo.
+
+### `libs/core`
+
+Provides the platform-wide `ApiResponse<T>` envelope (wraps all REST responses with a `success` flag, `data`, and `message`), and `BaseServiceException` which all domain exceptions extend from.
+
+### `libs/security`
+
+Auto-configured via Spring Boot's `@AutoConfiguration` mechanism. Every service that includes this library automatically gets:
+
+- **`KeycloakJwtAuthenticationConverter`** — Reads the `realm_access.roles` and `resource_access.<client>.roles` claims from the Keycloak JWT and maps them to Spring Security `GrantedAuthority` objects prefixed with `ROLE_`. This means method-level security annotations like `@PreAuthorize("hasRole('ADMIN')")` work transparently across all services.
+- **`AudienceValidator`** — Enforces that the JWT `aud` claim matches the expected service audience, preventing token reuse across services.
+- **`KeycloakProperties`** — Binds `keycloak.*` configuration properties.
+
+### `libs/events`
+
+Defines the `DomainEvent` interface — the contract for all domain events. Every event carries: a unique `eventId` (UUIDv4), an `eventType` discriminator string, an `eventVersion` for schema evolution, an `aggregateId`, an `aggregateType`, a UTC `occurredAt` timestamp, and an `idempotencyKey`. The `BaseEvent` abstract class provides a default implementation. The `DomainEventPublisher` utility wraps `KafkaTemplate` for publishing.
+
+### `libs/payment-gateway`
+
+Defines the `PaymentGatewayPort` hexagonal architecture port (interface). The Transaction Service depends on this interface at compile time. The concrete `StripeGatewayAdapter` that implements it lives inside the Transaction Service, keeping the core domain decoupled from the Stripe SDK. The port exposes three operations: `createCardPaymentIntent`, `initiateInstantPayout`, and `parseAndValidateWebhook`.
+
+---
+
+## 5. Service Catalogue
+
+### 5.1 IAM / User Service (port 8081)
+
+**Responsibility:** Maintains the platform's internal `UserProfile` table, which is a mirror of the identity held in Keycloak enriched with platform-specific attributes (KYC tier, Stripe customer linkage, phone hash).
+
+**Internal Design:**
+
+The IAM service operates as a **Keycloak webhook consumer**. When a user registers in Keycloak, Keycloak fires an HTTP POST to `/api/v1/internal/webhook/keycloak/user-registered` (via a custom Keycloak SPI event listener JAR deployed in `docker/keycloak/providers`). The `KeycloakWebhookController` receives this call and delegates to `UserProfileServiceImpl.createProfileFromKeycloak()`.
+
+The profile creation is **idempotent** — if a profile already exists for the Keycloak user ID, the call is a no-op. If the webhook payload does not include the user's email, the service makes a back-channel call to the **Keycloak Admin REST API** (`KeycloakAdminClient`) to retrieve it.
+
+The phone number is **never stored in plain text**. On profile update, `HashUtil.sha256()` hashes the normalised phone string before persisting it. This means phone numbers can be used for lookup (compare hashes) but cannot be reverse-engineered.
+
+**Outbox Event Published:** On every new `UserProfile` creation, an `USER_REGISTERED` outbox event is written to the `outbox_events` table targeting the `iam.user-events` Kafka topic. The `OutboxRelay` scheduler picks it up within 1 second and delivers it to Kafka.
+
+**KYC Tier Sync:** The `updateKycTier` method is called by downstream consumers (Kafka listeners) when a `KYC_VERIFIED` event arrives, updating the user's `kycTier` column to reflect their new compliance level.
+
+**Database:** `fintechwave_users` (PostgreSQL). Schema managed by Flyway.
+
+---
+
+### 5.2 KYC Service (port 8082)
+
+**Responsibility:** Manages the full Know-Your-Customer lifecycle — from initial shell creation through document upload, submission for review, and admin adjudication.
+
+**Tiered Model:**
+
+Users start at `TIER_0` (unverified). KYC approval promotes them to `TIER_1` (standard) or higher tiers. Each tier unlocks higher transaction limits. The `currentTier` and `requestedTier` fields on `KycApplication` track the user's present status and what they applied for.
+
+**Internal Design:**
+
+When a `USER_REGISTERED` event arrives on Kafka, the KYC service's consumer calls `createKycShell()`, which atomically creates a `KycApplication` record in `PENDING_SUBMISSION` status for the new user. This ensures every user has a KYC record and can begin the onboarding flow immediately.
+
+**Document Upload Flow:**
+
+1. The user uploads a document via `POST /api/v1/kyc/documents/{documentType}` as a multipart file.
+2. `KycApplicationServiceImpl.uploadDocument()` delegates to `MinioStorageService`, which streams the file directly to the MinIO bucket, returning a `StorageReference` (bucket name + object key).
+3. A `KycDocument` entity is saved to PostgreSQL referencing the MinIO object key — the actual file bytes are never stored in the relational database.
+4. Document retrieval (`GET /api/v1/kyc/documents`) generates **pre-signed MinIO URLs with a 15-minute TTL**, so the client can download files directly from MinIO without routing through the service.
+
+**State Machine:**
 
 ```
-methodName_StateUnderTest_ExpectedBehavior()
+PENDING_SUBMISSION → UNDER_REVIEW → VERIFIED
+                                  ↘ REJECTED → PENDING_SUBMISSION (re-submit)
+```
 
-// Examples:
-commitTransfer_WhenInsufficientBalance_ThrowsInsufficientFundsException()
-commitTransfer_WhenIdempotencyKeyDuplicated_ReturnsOriginalResult()
-commitTransfer_WhenConcurrentUpdate_RetrySucceedsWithoutDuplication()
+Transitions are strictly validated. Attempting an illegal transition (e.g., submitting an already-verified application) throws `InvalidKycStateTransitionException`. The `reviewApplication()` method is restricted to admin roles and sets `reviewedBy` and `reviewedAt` audit fields.
+
+**Outbox Events Published:**
+
+- `KYC_SUBMITTED` — when a user submits their application
+- `KYC_VERIFIED` — when an admin approves (consumed by ledger-service to provision wallet)
+- `KYC_REJECTED` — when an admin rejects
+
+**Database:** `fintechwave_kyc` (PostgreSQL). Schema managed by Flyway.
+
+---
+
+### 5.3 Ledger Service (port 8083)
+
+**Responsibility:** The core financial engine. Implements a strict double-entry bookkeeping system. Every money movement in the platform results in ledger entries here. No wallet is ever created without a `KYC_VERIFIED` event.
+
+**Internal Design:**
+
+**Chart of Accounts:** The ledger uses a typed account system. Each account has an `AccountType` (`ASSET`, `LIABILITY`, `EQUITY`) and an `AccountCode`. User wallets are `LIABILITY` accounts (the platform owes the user their balance). A `SUSPENSE` platform account acts as an intermediate holding account during reservation/commit cycles.
+
+**Double-Entry Validation:** Before any entries are persisted, `validateBalance()` asserts that the sum of all DEBIT amounts equals the sum of all CREDIT amounts in the request. Any imbalance throws `LedgerBalanceViolationException`, making it impossible to corrupt the ledger through unbalanced writes.
+
+**Reserve / Commit / Release Lifecycle:**
+
+For any outbound or peer-to-peer transaction, funds go through a three-phase lifecycle to prevent race conditions and double-spending:
+
+```
+RESERVE:  User Wallet (DEBIT) → Suspense Account (CREDIT)
+          Funds are locked; user balance decreases.
+
+COMMIT:   Suspense Account (DEBIT) → Destination Wallet (CREDIT)
+          Funds are released to the recipient upon payment confirmation.
+
+RELEASE:  Suspense Account (DEBIT) → User Wallet (CREDIT)
+          Funds are returned to user if the payment fails.
+```
+
+**Pessimistic Locking:** Balance reads inside `commitDoubleEntry()` use `findByIdWithLock()` which issues a `SELECT ... FOR UPDATE` query, ensuring concurrent transactions on the same account serialise correctly at the database level.
+
+**Wallet Provisioning:** The `KYCVerifiedConsumer` listens on the `kyc.verification-events` Kafka topic. On receiving a `KYC_VERIFIED` event, it calls `provisionWallet()` which creates an `Account` and a zero `Balance` record atomically. This is idempotent — duplicate events are safely skipped.
+
+**Reconciliation:** The `reconcile()` method sums all liability balances (total user funds) and compares against the platform float. Any divergence is a SEV-1 condition — it throws `LedgerBalanceViolationException` and logs a critical error.
+
+**Idempotency:** Every `LedgerEntry` carries an `idempotencyKey`. Before persisting, the service checks `existsByIdempotencyKey()`. Duplicate entries (from Kafka redelivery) are silently skipped.
+
+**Database:** `fintechwave_ledger` (PostgreSQL). Schema managed by Flyway.
+
+---
+
+### 5.4 Transaction Service (port 8084)
+
+**Responsibility:** The orchestration layer for all money movements. Handles the business logic of P2P transfers, card cash-in, and card cash-out. Acts as the bridge between user-facing operations and the Ledger Service (via Kafka events) and Stripe (via the `PaymentGatewayPort`).
+
+**Idempotency:** Every write endpoint requires an `idempotencyKey` (UUID) in the request body. The service calls `guardDuplicate()` before any database write — if the key already exists in `transaction_records`, a `DuplicateTransactionException` is thrown. This makes all transaction endpoints safe to retry from the client side.
+
+**P2P Transfer Flow:**
+
+1. Client sends `POST /api/v1/transactions/p2p` with `receiverId`, `amount`, `currency`, and `idempotencyKey`.
+2. `FeeServiceImpl` calculates the applicable fee for the `P2P` transaction type.
+3. A `TransactionRecord` is saved with status `INITIATED`.
+4. A `TRANSFER_INITIATED` outbox event is published, triggering the Ledger Service to **reserve** the funds (locking the sender's balance).
+5. The **Fraud Service** asynchronously consumes this event, performs velocity checks, and publishes a `TRANSACTION_APPROVED` or `TRANSACTION_FLAGGED` decision.
+6. If approved, the funds are **committed** to the receiver. If flagged, the reserved funds are **released** back to the sender.
+
+**Cash-In Flow (card deposit):**
+
+1. Client sends `POST /api/v1/transactions/cash-in` with a Stripe Payment Method ID.
+2. The service calls `paymentGateway.createCardPaymentIntent()` via the `StripeGatewayAdapter`, which creates a Stripe `PaymentIntent` and returns its ID.
+3. A `TransactionRecord` is saved with the `stripePaymentIntentId` in status `INITIATED`.
+4. **No ledger entry is made yet.** The ledger credit happens only when Stripe confirms payment via webhook.
+5. When Stripe fires `payment_intent.succeeded`, the `WebhookController` routes it to `handlePaymentIntentSucceeded()`, which marks the transaction `COMPLETED` and publishes a `CASH_IN_COMPLETED` outbox event for the Ledger Service to credit the user's wallet.
+
+**Cash-Out Flow (card withdrawal):**
+
+1. Client sends `POST /api/v1/transactions/cash-out` with a Stripe Payment Method ID.
+2. `FeeServiceImpl` calculates the cash-out fee.
+3. A `TransactionRecord` is saved with status `INITIATED`.
+4. The service immediately calls `paymentGateway.initiateInstantPayout()` via Stripe to start the payout.
+5. The `TransactionRecord` is updated to `RESERVED` with the `stripePayoutId`.
+6. A `CASH_OUT_INITIATED` outbox event is published for the Ledger Service to reserve funds.
+7. When Stripe confirms via `payout.paid` webhook, the transaction moves to `COMPLETED` and a `CASH_OUT_COMPLETED` event triggers the ledger commit. On `payout.failed`, a `CASH_OUT_FAILED` event triggers the ledger release (refund to user).
+
+**Stripe Webhook Validation:** The `WebhookController` receives raw Stripe webhook payloads and passes both the body and the `Stripe-Signature` header to `paymentGateway.parseAndValidateWebhook()`. The `StripeGatewayAdapter` uses the Stripe Java SDK's `Webhook.constructEvent()` to cryptographically verify the signature using the configured `STRIPE_WEBHOOK_SECRET`. Invalid signatures are rejected before any state is mutated.
+
+**Authorization on Reads:** `getTransactionById()` verifies that the calling user is either the sender or receiver of the transaction. If not, it returns `404 Not Found` (not `403`) to avoid leaking information about whether a transaction exists.
+
+**Database:** `fintechwave_tx` (PostgreSQL). Schema managed by Flyway.
+
+---
+
+### 5.5 Fraud Service (port 8085)
+
+**Responsibility:** Evaluates transactions against predefined risk rules (velocity checks, limits). Operates asynchronously to prevent slowing down the transaction reservation phase.
+
+**Internal Design:**
+Consumes `TRANSFER_INITIATED` events, evaluates Redis sliding windows (e.g. 60s tx count, 1h volume limits), and publishes `TRANSACTION_APPROVED` or `TRANSACTION_FLAGGED` outbox events. Contains a configurable rule engine.
+
+**Database:** `fintechwave_fraud` (PostgreSQL) + Redis for sliding windows. Schema managed by Flyway.
+
+---
+
+### 5.6 Notification Service (port 8086)
+
+**Responsibility:** Centralized multi-channel communication (Email, SMS, Push). Listens to platform-wide events and dispatches user notifications.
+
+**Internal Design:**
+Consumes events from `kyc`, `ledger`, `tx`, and `fraud` topics. Idempotent delivery. Retains history with a 90-day rolling retention sweeper (`NotificationRetentionSweeper`).
+
+**Database:** `fintechwave_notif` (PostgreSQL). Schema managed by Flyway.
+
+---
+
+### 5.7 Reporting Service (port 8087)
+
+**Responsibility:** Provides event-sourced read models (CQRS) for dashboards and administration without impacting transactional databases.
+
+**Internal Design:**
+Consumes events to build projections like `transaction_summary`, `daily_volume`, `balance_snapshot`, and `kyc_status_summary`. Exposes paginated admin endpoints.
+
+**Database:** `fintechwave_report` (PostgreSQL). Schema managed by Flyway.
+
+---
+
+## 6. Security Architecture
+
+### Authentication Flow
+
+All external requests must carry a Keycloak-issued Bearer JWT. The API Gateway validates the token's signature against Keycloak's JWK Set endpoint before forwarding the request downstream. Downstream services also validate the JWT independently as OAuth2 Resource Servers (defence in depth).
+
+### Role Mapping
+
+The `KeycloakJwtAuthenticationConverter` in `libs/security` extracts roles from two JWT claims:
+
+- **`realm_access.roles`** — Realm-level roles, mapped to `ROLE_<ROLE_NAME>` (e.g., `ROLE_ADMIN`, `ROLE_USER`).
+- **`resource_access.<client>.roles`** — Client-level roles, mapped to `ROLE_<CLIENT>_<ROLE_NAME>` (e.g., `ROLE_FINTECHWAVE_KYC_REVIEWER`).
+
+Keycloak's internal roles (`offline_access`, `uma_authorization`, `default-roles-*`) are filtered out.
+
+### Audience Validation
+
+The `AudienceValidator` ensures the JWT `aud` claim contains the expected audience string for each service. This prevents a JWT issued for one service from being replayed against another.
+
+### Webhook Security
+
+Internal Keycloak webhooks (`/api/v1/internal/webhook/**`) are excluded from JWT authentication at the Gateway level. These endpoints are secured instead by Keycloak's own SPI mechanism — the webhook is fired server-to-server from within the Docker network. Stripe webhooks (`/api/v1/webhooks/**`) are similarly excluded from JWT auth but secured via HMAC signature verification inside the Transaction Service.
+
+---
+
+## 7. Event-Driven Messaging — Transactional Outbox
+
+### The Problem Solved
+
+Without the Outbox Pattern, a service might save a database record and then attempt to publish a Kafka event. If the service crashes between these two steps, the database change is committed but the event is never published — causing permanent data inconsistency.
+
+### How the Outbox Works
+
+Every service has an `outbox_events` table in its own database. When a business operation occurs:
+
+1. **Within the same database transaction**, the domain entity is saved AND an `OutboxEvent` row is inserted into `outbox_events` (with `published = false`). Both writes are atomic. If either fails, both roll back.
+2. A scheduled `OutboxRelay` component (annotated `@Scheduled(fixedDelay = 1000)`) polls for unpublished events every second.
+3. For each pending event, `kafkaTemplate.send(...).get()` is called synchronously (the `.get()` makes the publish blocking, ensuring the acknowledgement is received before marking as published).
+4. Successfully published event IDs are batch-marked as `published = true` using `markPublished()`.
+5. On failure to publish a single event, an error is logged and that event is left as unpublished for the next polling cycle to retry.
+
+### Kafka Topics
+
+| Topic                     | Producer            | Consumer                                                               |
+| ------------------------- | ------------------- | ---------------------------------------------------------------------- |
+| `iam.user-events`         | IAM Service         | KYC Service                                                            |
+| `kyc.verification-events` | KYC Service         | IAM Service, Ledger Service, Notification Service                      |
+| `ledger.wallet-events`    | Ledger Service      | Transaction Service, Notification Service                              |
+| `tx.transaction-events`   | Transaction Service | Ledger Service, Fraud Service, Notification Service, Reporting Service |
+| `fraud.risk-events`       | Fraud Service       | Transaction Service, Notification Service                              |
+
+### Consumer Idempotency
+
+Every consumer service maintains a `processed_events` table. Before processing any Kafka message, the consumer checks whether the event's `idempotencyKey` already exists in this table. If it does, the message is a duplicate (Kafka redelivery) and is silently skipped. If not, the event is processed and the key is inserted atomically. This guarantees exactly-once processing semantics at the application level even when Kafka delivers a message more than once.
+
+---
+
+## 8. Financial Engine — Double-Entry Bookkeeping
+
+Every money movement in FintechWave follows the double-entry principle: for every debit there is an equal and opposite credit. The ledger is structured as follows:
+
+**Accounts Table** — Each account has an `accountType` (`LIABILITY`, `ASSET`, `EQUITY`), an `accountCode` (`USER_WALLET`, `SUSPENSE`, `FEE_REVENUE`), an `ownerId` (null for platform accounts), and a `currency`.
+
+**Balances Table** — One balance row per account. Updated atomically using pessimistic locking (`SELECT ... FOR UPDATE`) to prevent concurrent balance corruption. An optimistic `version` column provides additional concurrency protection via JPA's `@Version`.
+
+**Ledger Entries Table** — An immutable append-only log of every individual debit and credit. No entry is ever updated or deleted. Each entry references a `transactionId` (the business transaction that caused it) and carries its own `idempotencyKey`.
+
+**Balance Invariant:** The sum of all USER_WALLET liability balances must always equal the platform's FLOAT asset balance. The `reconcile()` endpoint validates this invariant on demand.
+
+---
+
+## 9. Stripe Payment Integration
+
+The Stripe integration follows the **Hexagonal Architecture (Ports and Adapters)** pattern. `libs/payment-gateway` defines `PaymentGatewayPort` — a pure Java interface with no Stripe SDK dependency. The Transaction Service depends only on this interface. The concrete `StripeGatewayAdapter` inside the Transaction Service implements the port using the Stripe Java SDK v26.
+
+This decoupling means the payment provider can be swapped (e.g., to PayPal, Adyen) without touching any business logic — only the adapter needs to change.
+
+**Cash-In (card deposit):** Uses Stripe's `PaymentIntent` API. The intent is created server-side with `MANUAL` capture mode, returned to the client for card confirmation, and the ledger is credited only after Stripe's `payment_intent.succeeded` webhook confirms actual card charge.
+
+**Cash-Out (card withdrawal):** Uses Stripe's `Payout` API for instant payouts to the user's card. The payout is initiated immediately, funds are reserved in the ledger, and the reserve is either committed (on `payout.paid`) or released (on `payout.failed`).
+
+---
+
+## 10. KYC Lifecycle State Machine
+
+```
+                  User Registers
+                        │
+                        ▼
+             ┌─────────────────────┐
+             │  PENDING_SUBMISSION  │  ← KYC shell auto-created
+             └──────────┬──────────┘
+                        │ User uploads documents + submits
+                        ▼
+             ┌─────────────────────┐
+             │    UNDER_REVIEW     │  ← KYC_SUBMITTED event fired
+             └──────────┬──────────┘
+                  ┌─────┴─────┐
+                  │           │
+                  ▼           ▼
+           ┌──────────┐  ┌──────────┐
+           │ VERIFIED │  │ REJECTED │
+           └──────────┘  └────┬─────┘
+     KYC_VERIFIED fired        │ User can re-submit
+     Wallet provisioned        ▼
+                     PENDING_SUBMISSION
+```
+
+The KYC tier is a compliance gate. Without `KYC_VERIFIED`, no wallet exists in the Ledger Service, and any attempt to transact will fail with a `WalletNotFoundException`.
+
+---
+
+## 11. User Registration Flow (End-to-End)
+
+This sequence shows how a new user flows through the entire platform from sign-up to wallet readiness:
+
+```
+1.  User registers via Keycloak (standard OIDC register flow).
+
+2.  Keycloak fires webhook → IAM Service /api/v1/internal/webhook/keycloak/user-registered
+
+3.  IAM Service creates UserProfile (TIER_0) in DB + writes USER_REGISTERED outbox event.
+
+4.  OutboxRelay publishes USER_REGISTERED → Kafka topic: iam.user-events
+
+5.  KYC Service consumes USER_REGISTERED → createKycShell() → KycApplication (PENDING_SUBMISSION)
+
+6.  User authenticates → receives Keycloak JWT
+
+7.  User uploads ID documents → KYC Service → stored in MinIO
+
+8.  User submits KYC application → status: UNDER_REVIEW → KYC_SUBMITTED outbox event
+
+9.  Admin reviews and approves → status: VERIFIED → KYC_VERIFIED outbox event
+
+10. Ledger Service consumes KYC_VERIFIED → provisionWallet() → Account + Balance (0.00 JOD)
+
+11. IAM Service consumes KYC_VERIFIED → updateKycTier(TIER_1) on UserProfile
+
+12. User is now fully onboarded and can initiate transactions.
 ```
 
 ---
 
-## 10. Build & Local Development
+## 12. Infrastructure & Data Stores
 
-### Prerequisites
+| Component                    | Technology                 | Purpose                                                 |
+| ---------------------------- | -------------------------- | ------------------------------------------------------- |
+| **PostgreSQL 16**            | Relational DB              | Persistent store for all services (one DB per service)  |
+| **Apache Kafka 7.6 (KRaft)** | Message broker             | Async inter-service event bus (no ZooKeeper)            |
+| **Keycloak 26**              | Identity Provider          | OAuth2/OIDC authentication, JWT issuance, user registry |
+| **MinIO**                    | S3-compatible object store | KYC document binary storage                             |
+| **Redis 7.2**                | In-memory cache            | Rate limiting, session caching, ephemeral state         |
+| **Spring Cloud Config**      | Git-backed config server   | Centralised, versioned configuration for all services   |
 
-| Tool | Version |
-|---|---|
-| Java | 21 (Eclipse Temurin) |
-| Maven | 3.9+ |
-| Docker | 24+ |
-| Docker Compose | v2 |
+**Database Isolation:** Each service has its own dedicated PostgreSQL database (`fintechwave_users`, `fintechwave_kyc`, `fintechwave_ledger`, `fintechwave_tx`, `fintechwave_fraud`, `fintechwave_notif`, `fintechwave_report`). Services never share a database schema, enforcing domain ownership boundaries.
 
-### Build
+**Schema Migration:** Every service uses **Flyway** for database schema migrations. Migrations run automatically on startup before the application accepts traffic. This ensures schema and application code are always in sync.
 
-```bash
-# Full build — compile, test, install all modules to local Maven repository
-mvn clean install
-
-# Skip tests for fast iteration (not for CI)
-mvn clean install -DskipTests
-```
-
-### Containerization (Jib)
-
-The project uses **Google Jib** — no Dockerfiles required. Jib builds optimized, layered, distroless images without a Docker daemon during CI.
-
-```bash
-# Build and load directly into local Docker daemon
-mvn compile jib:dockerBuild
-
-# Build and push to remote registry (CI/CD usage)
-mvn compile jib:build -Dimage.tag=1.2.0
-```
-
-### Local Development Stack
-
-```bash
-# Start the full local stack:
-# PostgreSQL, Kafka (KRaft), Redis, all microservices, Gateway
-cd docker
-docker compose up -d
-
-# Tail logs from all services
-docker compose logs -f
-
-# Stop and clean volumes
-docker compose down -v
-```
-
-### Environment Variables
-
-All service configuration is externalized. A `.env.example` file in the `docker/` directory documents all required variables. **Never commit a `.env` file with real credentials.**
-
-Key variables:
-
-| Variable | Description |
-|---|---|
-| `JWT_SECRET` | RS256 private key (min 256-bit for HS256, full key for RS256) |
-| `DB_URL` | JDBC URL for the service's dedicated database |
-| `KAFKA_BOOTSTRAP_SERVERS` | Kafka broker addresses |
-| `REDIS_HOST` / `REDIS_PORT` | Redis connection |
+**Container Images:** Every service is packaged as a Docker image using **Google Jib** (`jib-maven-plugin`), which builds optimised layered images without requiring a local Docker daemon. The base image is `eclipse-temurin:21-jre-jammy`. JVM flags enable container-aware memory limits (`-XX:+UseContainerSupport`, `-XX:MaxRAMPercentage=75.0`).
 
 ---
 
-## 11. Engineering Standards
+## 13. Technology Stack
 
-This codebase enforces the following non-negotiable standards. These are codified in `.agents/skills/code-standards.md` and `.agents/skills/.md` and are the authoritative references for all contributors and AI agents.
-
-### Code Review Checklist (Mandatory before merge)
-
-- [ ] No entity exposed in a controller method signature
-- [ ] No repository called directly from a controller
-- [ ] All write service methods annotated with `@Transactional`
-- [ ] All API responses wrapped in `ApiResponse<T>` envelope
-- [ ] No `@Autowired` field injection — constructor injection only via `@RequiredArgsConstructor`
-- [ ] No hardcoded credentials, URLs, or secrets
-- [ ] All relationships use `FetchType.LAZY` — `JOIN FETCH` only where explicitly needed
-- [ ] No `Optional.get()` without `.orElseThrow()`
-- [ ] No swallowed exceptions (empty catch blocks)
-- [ ] No PII or JWT token logged at any log level
-- [ ] Logging uses structured parameters, not string concatenation
-- [ ] Unit test exists for every public service method
-- [ ] All custom exceptions extend `BaseServiceException` with a machine-readable `errorCode`
-
-### Key Forbidden Patterns
-
-| Pattern | Reason |
-|---|---|
-| Kafka publish inside a service method (without Outbox) | DB commits without event = permanent inconsistency (SEV-1) |
-| Redis used as balance source of truth | Redis eviction = silent financial corruption |
-| Non-idempotent Kafka consumers | Duplicate events = duplicate financial execution |
-| `Optional.get()` without guard | Silent NPE in production |
-| H2 in financial integration tests | Behavioral differences cause undetected ledger bugs |
-| Generic base services with reflection mapping | Hidden coupling, cognitive overhead, DRY trap |
+| Layer            | Technology                             | Version             |
+| ---------------- | -------------------------------------- | ------------------- |
+| Language         | Java                                   | 21 (LTS)            |
+| Framework        | Spring Boot                            | 3.5.x               |
+| Gateway          | Spring Cloud Gateway                   | (WebFlux, reactive) |
+| Config           | Spring Cloud Config                    | Git-backed          |
+| Persistence      | Spring Data JPA + Hibernate            | —                   |
+| Database         | PostgreSQL                             | 16                  |
+| Migrations       | Flyway                                 | —                   |
+| Messaging        | Apache Kafka                           | 7.6.1 (KRaft)       |
+| Identity         | Keycloak                               | 26.6.2              |
+| Security         | Spring Security OAuth2 Resource Server | —                   |
+| Object Storage   | MinIO                                  | RELEASE.2024-06-13  |
+| Cache            | Redis                                  | 7.2                 |
+| Payment          | Stripe Java SDK                        | 26.3.0              |
+| API Docs         | SpringDoc OpenAPI (Swagger UI)         | —                   |
+| Code Gen         | Lombok + MapStruct                     | —                   |
+| Build            | Apache Maven                           | Multi-module        |
+| Packaging        | Google Jib                             | 3.4.3               |
+| Containerisation | Docker Compose                         | —                   |
 
 ---
 
-*This document is a living reference. Engineers are expected to keep it synchronized with architectural decisions. Proposals for changes to core patterns must go through an RFC process before implementation.*
+## 14. Port Reference
+
+| Service              | Port                           |
+| -------------------- | ------------------------------ |
+| API Gateway          | 8080                           |
+| IAM / User Service   | 8081                           |
+| KYC Service          | 8082                           |
+| Ledger Service       | 8083                           |
+| Transaction Service  | 8084                           |
+| Fraud Service        | 8085                           |
+| Notification Service | 8086                           |
+| Reporting Service    | 8087                           |
+| Config Server        | 8888                           |
+| Keycloak             | 8180 (host) → 8080 (container) |
+| Kafka (external)     | 29092                          |
+| PostgreSQL           | 5432                           |
+| Redis                | 6379                           |
+| MinIO API            | 9000                           |
+| MinIO Console        | 9001                           |

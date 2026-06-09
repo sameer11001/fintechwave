@@ -1,0 +1,13 @@
+services:
+  stripe-cli:
+    image: stripe/stripe-cli:latest
+    container_name: stripe-cli
+    command: >
+      listen
+      --forward-to http://localhost:8084/api/v1/webhooks/stripe
+    environment:
+      STRIPE_API_KEY: ${STRIPE_API_KEY}
+      STRIPE_DEVICE_NAME: local-docker-dev
+    extra_hosts:
+      - "localhost:host-gateway"
+    restart: unless-stopped

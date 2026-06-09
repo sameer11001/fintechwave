@@ -22,13 +22,14 @@ public class KYCVerifiedConsumer {
 
     @KafkaListener(topics = "kyc.verification-events", groupId = "ledger-service-kyc", containerFactory = "kafkaListenerContainerFactory")
     @Transactional
-    public void onKYCVerified(ConsumerRecord<String, String> record) {
+    public void onKYCVerified(ConsumerRecord<String, String> record, org.springframework.kafka.support.Acknowledgment ack) {
         try {
             JsonNode payload = objectMapper.readTree(record.value());
             String eventType = payload.path("eventType").asText();
 
             if (!"KYC_VERIFIED".equals(eventType)) {
                 log.debug("Ignoring event type={} on kyc.verification-events", eventType);
+                ack.acknowledge();
                 return;
             }
 
@@ -37,6 +38,7 @@ public class KYCVerifiedConsumer {
 
             log.info("KYCVerified received: userId={} — provisioning wallet", userId);
             ledgerService.provisionWallet(userId, currency);
+            ack.acknowledge();
 
         } catch (Exception ex) {
             log.error("KYCVerified consumer error: offset={} key={}", record.offset(), record.key(), ex);

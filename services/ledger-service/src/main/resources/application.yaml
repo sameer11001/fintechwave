@@ -72,8 +72,8 @@ server:
 
 app:
   keycloak:
-    jwk-set-uri: ${KEYCLOAK_URL:http://localhost:8180}/realms/fintechwave/protocol/openid-connect/certs
-    issuer-uri:  ${KEYCLOAK_URL:http://localhost:8180}/realms/fintechwave
+    issuer-uri:        ${KEYCLOAK_EXTERNAL_URL:http://localhost:8180}/realms/fintechwave
+    jwk-set-uri:       ${KEYCLOAK_URL:http://localhost:8180}/realms/fintechwave/protocol/openid-connect/certs
     expected-audience: fintechwave-platform
     
 management:

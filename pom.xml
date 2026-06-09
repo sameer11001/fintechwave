@@ -21,10 +21,13 @@
         <module>libs/payment-gateway</module>
         <module>platform/gateway</module>
         <module>platform/config-server</module>
-        <module>services/iam-service</module>
+        <module>services/user-service</module>
         <module>services/transaction-service</module>
         <module>services/kyc-service</module>
         <module>services/ledger-service</module>
+        <module>services/fraud-service</module>
+        <module>services/notification-service</module>
+        <module>services/reporting-service</module>
     </modules>
 
     <properties>

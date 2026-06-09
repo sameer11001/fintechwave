@@ -34,6 +34,7 @@ public class KeycloakJwtAuthenticationConverter implements Converter<Jwt, Abstra
         if (resourceAccess != null) {
             resourceAccess.forEach((clientName, clientInfo) -> {
                 if (clientInfo instanceof Map) {
+                    @SuppressWarnings("unchecked")
                     Map<String, Object> clientMap = (Map<String, Object>) clientInfo;
                     if (clientMap.containsKey("roles")) {
                         @SuppressWarnings("unchecked")

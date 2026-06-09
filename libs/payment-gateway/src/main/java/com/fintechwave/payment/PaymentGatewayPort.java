@@ -5,7 +5,7 @@ public interface PaymentGatewayPort {
     /*
      * Creates a Payment Intent for card cash-in.
      */
-    CardPaymentIntent createCardPaymentIntent(Money amount, String stripeCustomerId);
+    CardPaymentIntent createCardPaymentIntent(Money amount, String stripePaymentMethodId);
 
     /**
      * Initiates an instant payout to the user's original card.

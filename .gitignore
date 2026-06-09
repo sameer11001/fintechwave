@@ -32,3 +32,11 @@ build/
 ### VS Code ###
 .vscode/
 .vscode
+
+
+### Stripe ###
+.stripe
+.stripe/
+*.env
+*.env.local
+*.env.prod

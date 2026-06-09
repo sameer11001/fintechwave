@@ -53,10 +53,10 @@ public class LedgerServiceImpl implements ILedgerService {
         account = accountRepository.save(account);
 
         Balance balance = Balance.builder()
+                .accountId(account.getId())
                 .account(account)
                 .amount(BigDecimal.ZERO)
                 .currency(currency)
-                .version(0L)
                 .updatedAt(Instant.now())
                 .build();
         balanceRepository.save(balance);
@@ -214,10 +214,10 @@ public class LedgerServiceImpl implements ILedgerService {
                             .status("ACTIVE")
                             .build());
                     balanceRepository.save(Balance.builder()
+                            .accountId(acc.getId())
                             .account(acc)
                             .amount(BigDecimal.ZERO)
                             .currency(currency)
-                            .version(0L)
                             .updatedAt(Instant.now())
                             .build());
                     log.info("Platform account provisioned: code={} accountId={}", code.getCode(), acc.getId());
