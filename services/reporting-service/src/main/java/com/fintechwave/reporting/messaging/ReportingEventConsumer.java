@@ -142,7 +142,8 @@ public class ReportingEventConsumer {
             return;
         }
 
-        UUID userId      = UUID.fromString(payload.path("userId").asText());
+        String userIdStr = payload.has("userId") ? payload.path("userId").asText() : payload.path("senderId").asText();
+        UUID userId      = UUID.fromString(userIdStr);
         BigDecimal amount = new BigDecimal(payload.path("amount").asText("0"));
         String currency  = payload.path("currency").asText("USD");
         UUID counterparty = payload.has("receiverId")

@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package com.fintechwave.grpc.ledger;
+
+option java_multiple_files = true;
+option java_package = "com.fintechwave.grpc.ledger";
+option java_outer_classname = "LedgerProto";
+
+service LedgerService {
+  rpc ReserveFunds (ReserveFundsRequest) returns (ReserveFundsResponse);
+}
+
+message ReserveFundsRequest {
+  string transaction_id = 1;
+  string user_id = 2;
+  double amount = 3;
+  string currency = 4;
+}
+
+message ReserveFundsResponse {
+  bool success = 1;
+  string message = 2;
+}

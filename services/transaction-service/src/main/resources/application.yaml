@@ -98,6 +98,6 @@ logging:
 
 grpc:
   client:
-    fraud-service:
-      address: 'static://${FRAUD_SERVICE_HOST:localhost}:9095'
+    ledger-service:
+      address: 'dns:///${LEDGER_SERVICE_HOST:localhost}:9095'
       negotiation-type: plaintext

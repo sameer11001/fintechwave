@@ -6,6 +6,7 @@ import com.fintechwave.payment.Money;
 import com.fintechwave.payment.PaymentGatewayPort;
 import com.fintechwave.payment.PayoutResult;
 import com.fintechwave.payment.WebhookEvent;
+import com.fintechwave.transaction.api.grpc.LedgerGrpcClient;
 import com.fintechwave.transaction.domain.entity.OutboxEvent;
 import com.fintechwave.transaction.domain.entity.TransactionRecord;
 import com.fintechwave.transaction.domain.enums.TransactionStatus;
@@ -44,6 +45,7 @@ public class TransactionServiceImpl implements ITransactionService {
     private final PaymentGatewayPort paymentGateway;
     private final IFeeService feeService;
     private final ObjectMapper objectMapper;
+    private final LedgerGrpcClient ledgerGrpcClient;
 
     @Override
     @Transactional
@@ -69,6 +71,17 @@ public class TransactionServiceImpl implements ITransactionService {
                         .description(request.description())
                         .build());
 
+        // Synchronous Reservation — if this fails the transaction is marked FAILED
+        // and we throw so the caller gets an appropriate error response.
+        try {
+            ledgerGrpcClient.reserveFundsSync(tx.getId(), senderId, request.amount().add(fee), request.currency());
+        } catch (Exception reserveEx) {
+            log.warn("Ledger reservation failed for txId={} — aborting: {}", tx.getId(), reserveEx.getMessage());
+            tx.setStatus(TransactionStatus.FAILED);
+            transactionRepository.save(tx);
+            throw reserveEx; // re-throw so the caller receives the appropriate error
+        }
+
         publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_INITIATED", 1,
                 Map.of(
                         "transactionId", tx.getId().toString(),
@@ -78,7 +91,8 @@ public class TransactionServiceImpl implements ITransactionService {
                         "currency", request.currency(),
                         "feeAmount", fee.toPlainString()));
 
-        log.info("P2P transfer initiated: txId={} senderId={} amount={} {}", tx.getId(), senderId, request.amount(),
+        log.info("P2P transfer initiated and reserved: txId={} senderId={} amount={} {}", tx.getId(),
+                senderId, request.amount(),
                 request.currency());
         return TransactionResponse.from(tx);
     }
@@ -168,10 +182,8 @@ public class TransactionServiceImpl implements ITransactionService {
     }
 
     private void handlePaymentIntentSucceeded(String paymentIntentId) {
-        transactionRepository.findAll().stream()
-                .filter(tx -> paymentIntentId.equals(tx.getStripePaymentIntentId()))
-                .findFirst()
-                .ifPresent(tx -> {
+        transactionRepository.findByStripePaymentIntentId(paymentIntentId)
+                .ifPresentOrElse(tx -> {
                     tx.setStatus(TransactionStatus.COMPLETED);
                     transactionRepository.save(tx);
 
@@ -182,14 +194,13 @@ public class TransactionServiceImpl implements ITransactionService {
                                     "currency", tx.getCurrency()));
 
                     log.info("Cash-in completed via Stripe webhook: txId={}", tx.getId());
-                });
+                }, () -> log.warn("No transaction found for payment_intent.succeeded: paymentIntentId={}",
+                        paymentIntentId));
     }
 
     private void handlePaymentIntentFailed(String paymentIntentId) {
-        transactionRepository.findAll().stream()
-                .filter(tx -> paymentIntentId.equals(tx.getStripePaymentIntentId()))
-                .findFirst()
-                .ifPresent(tx -> {
+        transactionRepository.findByStripePaymentIntentId(paymentIntentId)
+                .ifPresentOrElse(tx -> {
                     tx.setStatus(TransactionStatus.FAILED);
                     transactionRepository.save(tx);
 
@@ -198,14 +209,13 @@ public class TransactionServiceImpl implements ITransactionService {
                                     "userId", tx.getSenderId().toString()));
 
                     log.warn("Cash-in failed via Stripe webhook: txId={}", tx.getId());
-                });
+                }, () -> log.warn("No transaction found for payment_intent.payment_failed: paymentIntentId={}",
+                        paymentIntentId));
     }
 
     private void handlePayoutPaid(String payoutId) {
-        transactionRepository.findAll().stream()
-                .filter(tx -> payoutId.equals(tx.getStripePayoutId()))
-                .findFirst()
-                .ifPresent(tx -> {
+        transactionRepository.findByStripePayoutId(payoutId)
+                .ifPresentOrElse(tx -> {
                     tx.setStatus(TransactionStatus.COMPLETED);
                     transactionRepository.save(tx);
 
@@ -216,14 +226,12 @@ public class TransactionServiceImpl implements ITransactionService {
                                     "currency", tx.getCurrency()));
 
                     log.info("Cash-out completed via payout.paid webhook: txId={}", tx.getId());
-                });
+                }, () -> log.warn("No transaction found for payout.paid: payoutId={}", payoutId));
     }
 
     private void handlePayoutFailed(String payoutId) {
-        transactionRepository.findAll().stream()
-                .filter(tx -> payoutId.equals(tx.getStripePayoutId()))
-                .findFirst()
-                .ifPresent(tx -> {
+        transactionRepository.findByStripePayoutId(payoutId)
+                .ifPresentOrElse(tx -> {
                     tx.setStatus(TransactionStatus.FAILED);
                     transactionRepository.save(tx);
 
@@ -232,7 +240,7 @@ public class TransactionServiceImpl implements ITransactionService {
                                     "userId", tx.getSenderId().toString()));
 
                     log.warn("Cash-out failed via payout.failed webhook: txId={}", tx.getId());
-                });
+                }, () -> log.warn("No transaction found for payout.failed: payoutId={}", payoutId));
     }
 
     @Override
@@ -252,6 +260,44 @@ public class TransactionServiceImpl implements ITransactionService {
         }
 
         return TransactionResponse.from(tx);
+    }
+
+    @Override
+    @Transactional
+    public void handleFraudDecision(UUID transactionId, boolean approved) {
+        TransactionRecord tx = transactionRepository.findById(transactionId).orElse(null);
+        if (tx == null) {
+            log.warn("handleFraudDecision: transaction not found for txId={} — skipping (likely already cleaned up)",
+                    transactionId);
+            return;
+        }
+
+        if (tx.getStatus() != TransactionStatus.RESERVED && tx.getStatus() != TransactionStatus.INITIATED) {
+            log.warn("handleFraudDecision: transaction txId={} is already in terminal status={} — skipping",
+                    transactionId, tx.getStatus());
+            return;
+        }
+
+        if (approved) {
+            tx.setStatus(TransactionStatus.COMPLETED);
+            publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_COMPLETED", 1,
+                    Map.of("transactionId", tx.getId().toString(),
+                            "senderId", tx.getSenderId().toString(),
+                            "receiverId", tx.getReceiverId().toString(),
+                            "amount", tx.getAmount().toPlainString(),
+                            "currency", tx.getCurrency()));
+            log.info("P2P transfer approved by fraud, completing: txId={}", tx.getId());
+        } else {
+            tx.setStatus(TransactionStatus.FAILED);
+            // For release, we must release the amount + fee back to the sender
+            publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_FAILED", 1,
+                    Map.of("transactionId", tx.getId().toString(),
+                            "senderId", tx.getSenderId().toString(),
+                            "amount", tx.getAmount().add(tx.getFeeAmount()).toPlainString(),
+                            "currency", tx.getCurrency()));
+            log.info("P2P transfer rejected by fraud, failing: txId={}", tx.getId());
+        }
+        transactionRepository.save(tx);
     }
 
     private void guardDuplicate(UUID idempotencyKey) {

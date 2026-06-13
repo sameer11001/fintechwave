@@ -8,6 +8,7 @@ import com.fintechwave.iam.domain.enums.UserStatus;
 import com.fintechwave.iam.dto.request.KeycloakUserEventRequest;
 import com.fintechwave.iam.dto.request.UpdateUserProfileRequest;
 import com.fintechwave.iam.dto.response.UserProfileResponse;
+import com.fintechwave.iam.exception.KycNotFoundException;
 import com.fintechwave.iam.exception.UserNotFoundException;
 import com.fintechwave.iam.repository.OutboxEventRepository;
 import com.fintechwave.iam.repository.UserProfileRepository;
@@ -15,7 +16,6 @@ import com.fintechwave.iam.service.IUserProfileService;
 import com.fintechwave.iam.service.KeycloakAdminClient;
 import com.fintechwave.iam.util.HashUtil;
 import lombok.RequiredArgsConstructor;
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -99,7 +99,12 @@ public class UserProfileServiceImpl implements IUserProfileService {
     @Override
     @Transactional
     public void updateKycTier(UUID userId, String tier) {
-        KycTier kycTier = KycTier.valueOf(tier);
+        KycTier kycTier;
+        try {
+            kycTier = KycTier.valueOf(tier.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new KycNotFoundException(tier);
+        }
         int rows = userProfileRepository.updateKycTier(userId, kycTier);
         if (rows == 0)
             throw new UserNotFoundException(userId);
@@ -131,30 +136,33 @@ public class UserProfileServiceImpl implements IUserProfileService {
                 .build();
     }
 
-    @SneakyThrows
     private OutboxEvent buildOutboxEvent(UserProfile profile) {
-        GenericDomainEvent domainEvent = new GenericDomainEvent(
-                "USER_REGISTERED",
-                1,
-                profile.getId(),
-                "USER",
-                Map.of(
-                        "userId", profile.getId().toString(),
-                        "keycloakId", profile.getKeycloakId().toString(),
-                        "email", profile.getEmail(),
-                        "kycTier", profile.getKycTier().name())
-        );
+        try {
+            GenericDomainEvent domainEvent = new GenericDomainEvent(
+                    "USER_REGISTERED",
+                    1,
+                    profile.getId(),
+                    "USER",
+                    Map.of(
+                            "userId", profile.getId().toString(),
+                            "keycloakId", profile.getKeycloakId().toString(),
+                            "email", profile.getEmail(),
+                            "kycTier", profile.getKycTier().name()));
 
-        String payloadJson = objectMapper.writeValueAsString(domainEvent);
+            String payloadJson = objectMapper.writeValueAsString(domainEvent);
 
-        return OutboxEvent.builder()
-                .aggregateId(domainEvent.getAggregateId())
-                .aggregateType(domainEvent.getAggregateType())
-                .eventType(domainEvent.getEventType())
-                .eventVersion(domainEvent.getEventVersion())
-                .idempotencyKey(domainEvent.getIdempotencyKey())
-                .topic(TOPIC_USER_EVENTS)
-                .payload(payloadJson)
-                .build();
+            return OutboxEvent.builder()
+                    .aggregateId(domainEvent.getAggregateId())
+                    .aggregateType(domainEvent.getAggregateType())
+                    .eventType(domainEvent.getEventType())
+                    .eventVersion(domainEvent.getEventVersion())
+                    .idempotencyKey(domainEvent.getIdempotencyKey())
+                    .topic(TOPIC_USER_EVENTS)
+                    .payload(payloadJson)
+                    .build();
+        } catch (Exception e) {
+            log.error("Failed to build USER_REGISTERED outbox event for userId={}", profile.getId(), e);
+            throw new RuntimeException("Failed to serialize outbox event for user: " + profile.getId(), e);
+        }
     }
 }

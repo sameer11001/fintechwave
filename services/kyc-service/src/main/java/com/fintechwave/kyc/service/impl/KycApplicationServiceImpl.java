@@ -98,6 +98,17 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
             throw new InvalidKycStateTransitionException("Documents cannot be added to a verified application");
         }
 
+        if (file.isEmpty()) {
+            throw new InvalidKycStateTransitionException("Uploaded file is empty");
+        }
+
+        String contentType = file.getContentType();
+        if (contentType == null || contentType.isBlank()) {
+            contentType = "application/octet-stream";
+            log.warn("Content-Type not provided for document upload: applicationId={} documentType={} — defaulting to application/octet-stream",
+                    app.getId(), documentType);
+        }
+
         IDocumentStorageService.StorageReference ref = storageService.upload(app.getId(), userId, documentType.name(),
                 file);
 
@@ -106,7 +117,7 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
                 .documentType(documentType)
                 .storageBucket(ref.bucket())
                 .storageKey(ref.objectKey())
-                .contentType(file.getContentType())
+                .contentType(contentType)
                 .fileSizeBytes(file.getSize())
                 .build();
         documentRepository.save(document);
@@ -129,7 +140,16 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
     @Override
     public Page<KycApplicationResponse> listApplications(String status, Pageable pageable) {
         if (status != null && !status.isBlank()) {
-            KycStatus kycStatus = KycStatus.valueOf(status.toUpperCase());
+            KycStatus kycStatus;
+            try {
+                kycStatus = KycStatus.valueOf(status.toUpperCase());
+            } catch (IllegalArgumentException e) {
+                throw new InvalidKycStateTransitionException(
+                        "Invalid KYC status filter '" + status + "'. Valid values are: " +
+                                java.util.Arrays.stream(KycStatus.values())
+                                        .map(Enum::name)
+                                        .collect(java.util.stream.Collectors.joining(", ")));
+            }
             return applicationRepository.findAllByStatus(kycStatus, pageable)
                     .map(KycApplicationResponse::from);
         }

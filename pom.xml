@@ -19,6 +19,7 @@
         <module>libs/security</module>
         <module>libs/events</module>
         <module>libs/payment-gateway</module>
+        <module>libs/grpc-contracts</module>
         <module>platform/gateway</module>
         <module>platform/config-server</module>
         <module>services/user-service</module>

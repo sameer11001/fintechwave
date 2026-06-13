@@ -30,20 +30,26 @@ public class KycOutboxRelay {
             return;
         }
 
+        int published = 0;
         for (OutboxEvent event : pending) {
             try {
                 kafkaTemplate.send(TOPIC_KYC_EVENTS, event.getAggregateId().toString(), event.getPayload()).get();
                 event.setPublished(true);
                 outboxEventRepository.save(event);
+                published++;
                 log.debug("Outbox event relayed: eventType={} aggregateId={}", event.getEventType(),
                         event.getAggregateId());
             } catch (Exception e) {
-                log.error("Failed to relay outbox event: id={} eventType={}", event.getId(), event.getEventType(), e);
-                // If we fail to send, break or let it rollback
-                throw new RuntimeException("Kafka send failed", e);
+                // Log and continue — this event will be retried on the next relay tick.
+                // Do NOT throw here as that would prevent subsequent events in the batch
+                // from being published and could cause Kafka retry storms.
+                log.error("Failed to relay KYC outbox event: id={} eventType={} — will retry on next cycle",
+                        event.getId(), event.getEventType(), e);
             }
         }
 
-        log.info("Outbox relay completed: {} events published", pending.size());
+        if (published > 0) {
+            log.info("KYC outbox relay completed: {}/{} events published", published, pending.size());
+        }
     }
 }

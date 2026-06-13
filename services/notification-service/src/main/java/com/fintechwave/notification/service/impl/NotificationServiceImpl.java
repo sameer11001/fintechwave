@@ -1,7 +1,6 @@
 package com.fintechwave.notification.service.impl;
 
 import com.fintechwave.notification.domain.entity.Notification;
-import com.fintechwave.notification.domain.entity.ProcessedEvent;
 import com.fintechwave.notification.domain.enums.NotificationChannel;
 import com.fintechwave.notification.domain.enums.NotificationStatus;
 import com.fintechwave.notification.repository.NotificationRepository;
@@ -9,7 +8,6 @@ import com.fintechwave.notification.repository.ProcessedEventRepository;
 import com.fintechwave.notification.service.INotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;

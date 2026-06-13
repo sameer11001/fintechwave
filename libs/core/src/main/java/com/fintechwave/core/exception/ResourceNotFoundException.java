@@ -1,8 +1,15 @@
 package com.fintechwave.core.exception;
 
-public abstract class ResourceNotFoundException extends BaseServiceException {
+import org.springframework.http.HttpStatus;
 
-    protected ResourceNotFoundException(String message) {
-        super(message, "RESOURCE_NOT_FOUND");
+public class ResourceNotFoundException extends BaseServiceException {
+
+    public ResourceNotFoundException(String resource, Object id) {
+        super(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND",
+                resource + " not found with id: " + id);
+    }
+
+    public ResourceNotFoundException(String message) {
+        super(HttpStatus.NOT_FOUND, "RESOURCE_NOT_FOUND", message);
     }
 }

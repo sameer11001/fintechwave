@@ -1,7 +1,17 @@
+server:
+  port: 8083
+  error:
+    include-message: never
+    include-stacktrace: never
+
+grpc:
+  server:
+    port: 9095
+
 spring:
   application:
     name: ledger-service
-
+    
   config:
     import: "configserver:${CONFIG_SERVER_URI:http://localhost:8888}"
 
@@ -63,12 +73,6 @@ spring:
       resourceserver:
         jwt:
           jwk-set-uri: ${KEYCLOAK_URL:http://localhost:8180}/realms/fintechwave/protocol/openid-connect/certs
-
-server:
-  port: 8083
-  error:
-    include-message: never
-    include-stacktrace: never
 
 app:
   keycloak:

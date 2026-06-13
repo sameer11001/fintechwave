@@ -1,14 +1,15 @@
 package com.fintechwave.ledger.domain.enums;
 
+import java.util.Arrays;
+
 public enum AccountCode {
 
     // Assets
     PLATFORM_FLOAT   ("1000", AccountType.ASSET),
     STRIPE_ESCROW    ("1001", AccountType.ASSET),
-    SUSPENSE         ("1002", AccountType.ASSET),
-
     // Liabilities
     USER_WALLET      ("2000", AccountType.LIABILITY),
+    SUSPENSE         ("2001", AccountType.LIABILITY),
 
     // Revenue
     P2P_FEE_REVENUE      ("3000", AccountType.REVENUE),
@@ -29,4 +30,11 @@ public enum AccountCode {
 
     public String      getCode() { return code; }
     public AccountType getType() { return type; }
+
+    public static AccountCode fromCode(String code) {
+        return Arrays.stream(values())
+            .filter(ac -> ac.code.equals(code))
+            .findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("Unknown account code: " + code));
+    }
 }

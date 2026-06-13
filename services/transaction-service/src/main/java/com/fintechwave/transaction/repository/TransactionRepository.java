@@ -18,4 +18,16 @@ public interface TransactionRepository extends JpaRepository<TransactionRecord, 
     Page<TransactionRecord> findBySenderIdAndTransactionType(UUID senderId, TransactionType type, Pageable pageable);
 
     boolean existsByIdempotencyKey(UUID idempotencyKey);
+
+    /**
+     * Used by Stripe webhook handlers — avoids full-table scan.
+     * Requires a DB index on stripe_payment_intent_id.
+     */
+    Optional<TransactionRecord> findByStripePaymentIntentId(String stripePaymentIntentId);
+
+    /**
+     * Used by Stripe payout webhook handlers — avoids full-table scan.
+     * Requires a DB index on stripe_payout_id.
+     */
+    Optional<TransactionRecord> findByStripePayoutId(String stripePayoutId);
 }

@@ -34,18 +34,25 @@ public class TransactionOutboxRelay {
             return;
         }
 
+        int published = 0;
         for (OutboxEvent event : pending) {
             try {
                 kafkaTemplate.send(TOPIC, event.getAggregateId().toString(), event.getPayload()).get();
                 event.setPublished(true);
                 outboxEventRepository.save(event);
+                published++;
                 log.debug("Transaction event relayed: type={} txId={}", event.getEventType(), event.getAggregateId());
             } catch (Exception e) {
-                log.error("Failed to relay transaction event: id={} type={}", event.getId(), event.getEventType(), e);
-                throw new RuntimeException("Kafka send failed", e);
+                // Log and continue — this event will be retried on the next relay tick.
+                // Do NOT throw here as that would prevent subsequent events in the batch
+                // from being published and could cause Kafka retry storms.
+                log.error("Failed to relay transaction event: id={} type={} — will retry on next cycle",
+                        event.getId(), event.getEventType(), e);
             }
         }
 
-        log.info("Transaction outbox relay: {} events published", pending.size());
+        if (published > 0) {
+            log.info("Transaction outbox relay: {}/{} events published", published, pending.size());
+        }
     }
 }

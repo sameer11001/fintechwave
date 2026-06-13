@@ -1,17 +1,16 @@
 package com.fintechwave.transaction.exception;
 
+import com.fintechwave.core.exception.BaseServiceException;
 import org.springframework.http.HttpStatus;
 
-public abstract class TransactionServiceException extends RuntimeException {
+public abstract class TransactionServiceException extends BaseServiceException {
 
-    private final HttpStatus httpStatus;
-
-    protected TransactionServiceException(String message, HttpStatus httpStatus) {
-        super(message);
-        this.httpStatus = httpStatus;
+    protected TransactionServiceException(HttpStatus status, String errorCode, String message) {
+        super(status, errorCode, message);
     }
 
-    public HttpStatus getHttpStatus() {
-        return httpStatus;
+    protected TransactionServiceException(HttpStatus status, String errorCode,
+            String message, Throwable cause) {
+        super(status, errorCode, message, cause);
     }
 }

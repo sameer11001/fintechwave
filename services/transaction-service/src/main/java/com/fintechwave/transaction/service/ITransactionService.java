@@ -63,4 +63,6 @@ public interface ITransactionService {
      * Returns a single transaction by ID — caller must be sender or receiver.
      */
     TransactionResponse getTransactionById(UUID transactionId, UUID callerId);
+
+    void handleFraudDecision(UUID transactionId, boolean approved);
 }

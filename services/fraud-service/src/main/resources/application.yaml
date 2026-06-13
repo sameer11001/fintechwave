@@ -117,7 +117,3 @@ logging:
     "[org.springframework.kafka]": INFO
     "[org.springframework.cloud.config]": INFO
     "[org.springframework.data.redis]": INFO
-
-grpc:
-  server:
-    port: 9095

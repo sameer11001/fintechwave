@@ -102,10 +102,7 @@ public class LedgerServiceImpl implements ILedgerService {
                     .orElseThrow(() -> new WalletNotFoundException(account.getId()));
 
             BigDecimal newAmount;
-            if (EntryType.CREDIT == entry.getEntryType()) {
-                // LIABILITY/EQUITY accounts: CREDIT increases balance
-                // ASSET/EXPENSE accounts: CREDIT decreases balance
-                // For simplicity: wallet (LIABILITY) CREDIT = increase
+            if (entry.getEntryType() == account.getAccountType().getNormalBalance()) {
                 newAmount = balance.getAmount().add(line.amount());
             } else {
                 newAmount = balance.getAmount().subtract(line.amount());
@@ -129,9 +126,9 @@ public class LedgerServiceImpl implements ILedgerService {
         Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
         commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
-                new DoubleEntryRequest.EntryLine(sourceAccountId, "DEBIT", amount, currency, UUID.randomUUID(),
+                new DoubleEntryRequest.EntryLine(sourceAccountId, "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-reserve-debit").getBytes()),
                         "RESERVE: lock funds"),
-                new DoubleEntryRequest.EntryLine(suspense.getId(), "CREDIT", amount, currency, UUID.randomUUID(),
+                new DoubleEntryRequest.EntryLine(suspense.getId(), "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-reserve-credit").getBytes()),
                         "RESERVE: credit suspense"))));
 
         log.info("RESERVE: transactionId={} amount={} currency={}", transactionId, amount, currency);
@@ -143,9 +140,9 @@ public class LedgerServiceImpl implements ILedgerService {
         Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
         commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
-                new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency, UUID.randomUUID(),
+                new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-commit-debit").getBytes()),
                         "COMMIT: debit suspense"),
-                new DoubleEntryRequest.EntryLine(destinationAccountId, "CREDIT", amount, currency, UUID.randomUUID(),
+                new DoubleEntryRequest.EntryLine(destinationAccountId, "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-commit-credit").getBytes()),
                         "COMMIT: credit destination"))));
 
         log.info("COMMIT: transactionId={} amount={} currency={}", transactionId, amount, currency);
@@ -157,9 +154,9 @@ public class LedgerServiceImpl implements ILedgerService {
         Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
         commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
-                new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency, UUID.randomUUID(),
+                new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-release-debit").getBytes()),
                         "RELEASE: return from suspense"),
-                new DoubleEntryRequest.EntryLine(sourceAccountId, "CREDIT", amount, currency, UUID.randomUUID(),
+                new DoubleEntryRequest.EntryLine(sourceAccountId, "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-release-credit").getBytes()),
                         "RELEASE: credit back to source"))));
 
         log.info("RELEASE: transactionId={} amount={} currency={}", transactionId, amount, currency);

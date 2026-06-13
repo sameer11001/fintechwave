@@ -2,6 +2,8 @@ package com.fintechwave.iam.exception;
 
 import java.util.UUID;
 
+import com.fintechwave.core.exception.ResourceNotFoundException;
+
 public class UserNotFoundException extends ResourceNotFoundException {
 
     public UserNotFoundException(UUID keycloakId) {

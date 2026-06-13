@@ -1,15 +1,10 @@
 package com.fintechwave.iam.exception;
 
-public abstract class BaseServiceException extends RuntimeException {
+@Deprecated(since = "1.1.0", forRemoval = true)
+public abstract class BaseServiceException extends com.fintechwave.core.exception.BaseServiceException {
 
-    private final String errorCode;
-
-    protected BaseServiceException(String message, String errorCode) {
-        super(message);
-        this.errorCode = errorCode;
-    }
-
-    public String getErrorCode() {
-        return errorCode;
+    protected BaseServiceException(org.springframework.http.HttpStatus status,
+            String errorCode, String message) {
+        super(status, errorCode, message);
     }
 }

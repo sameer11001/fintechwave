@@ -1,12 +1,17 @@
 package com.fintechwave.iam.domain.enums;
 
+/**
+ * KYC Tiers — compliance gate for wallet provisioning.
+ * No wallet is created below TIER_1.
+ *
+ * Tier 0 → Email verified (Keycloak) — no wallet
+ * Tier 1 → National ID photo — basic wallet, low limits
+ * Tier 2 → Facial biometric — standard wallet
+ * Tier 3 → Enhanced due diligence — high-value wallet
+ */
 public enum KycTier {
-    /** Email verified (Keycloak) — no wallet. */
     TIER_0,
-    /** National ID photo submitted and approved — basic wallet, low limits. */
     TIER_1,
-    /** Facial biometric approved — standard wallet. */
     TIER_2,
-    /** Enhanced due diligence approved — high-value wallet. */
     TIER_3
 }

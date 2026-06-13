@@ -22,13 +22,34 @@ services:
       start_period: 15s
     restart: no
 
+  keycloak-db:
+    image: postgres:16-alpine
+    container_name: fintechwave-keycloak-db
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: ${DB_PASS:-postgres}
+      POSTGRES_DB:       keycloak_db         
+    ports:
+      - "5433:5432"
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: no
+
   keycloak:
     image: quay.io/keycloak/keycloak:26.6.2
     container_name: fintechwave-keycloak
     command: start-dev
     environment:
       KC_DB:                    postgres
-      KC_DB_URL:                jdbc:postgresql://postgres:5432/keycloak_db
+      KC_DB_URL:                jdbc:postgresql://keycloak-db:5432/keycloak_db
       KC_DB_USERNAME:           postgres
       KC_DB_PASSWORD:           ${DB_PASS:-postgres}
       KEYCLOAK_ADMIN:           ${KEYCLOAK_ADMIN:-admin}
@@ -46,7 +67,7 @@ services:
     networks:
       - fintechwave
     depends_on:
-      postgres:
+      keycloak-db:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080;echo -e 'GET /realms/master HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n' >&3;grep -q '200 OK' <&3"]
@@ -280,6 +301,7 @@ services:
       DB_PASS:                 ${DB_PASS:-postgres}
       KEYCLOAK_URL:            http://keycloak:8080
       KAFKA_BOOTSTRAP:         kafka:9092
+      LEDGER_SERVICE_HOST:     ledger-service
       STRIPE_API_KEY:          ${STRIPE_API_KEY:-sk_test_51Tg6jpFYLnavoJLBI9Wngbq7jwmmU2FsOztcX3VJWHKCa538C4K8u3VPb5p413UizHOjIZFx9Z3ikA7IQxQM0AGf00OpdNmv2X}
       STRIPE_WEBHOOK_SECRET:   ${STRIPE_WEBHOOK_SECRET:-whsec_4e48d4fec09ffb4c2fec97d4a600c5fdfeb83c5b033644b88fc3b503fc5f3e55}
     ports:
@@ -413,6 +435,7 @@ services:
 
 volumes:
   postgres-data:
+  keycloak-db-data:
   minio-data:
 
 networks:
