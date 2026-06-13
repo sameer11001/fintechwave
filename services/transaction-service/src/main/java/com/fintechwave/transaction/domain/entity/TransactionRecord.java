@@ -24,10 +24,10 @@ import java.util.UUID;
  */
 @Entity
 @Table(name = "transactions", indexes = {
-        @Index(name = "idx_tx_sender_id",       columnList = "sender_id"),
-        @Index(name = "idx_tx_receiver_id",     columnList = "receiver_id"),
-        @Index(name = "idx_tx_status",          columnList = "status"),
-        @Index(name = "idx_tx_type",            columnList = "transaction_type"),
+        @Index(name = "idx_tx_sender_id", columnList = "sender_id"),
+        @Index(name = "idx_tx_receiver_id", columnList = "receiver_id"),
+        @Index(name = "idx_tx_status", columnList = "status"),
+        @Index(name = "idx_tx_type", columnList = "transaction_type"),
         @Index(name = "idx_tx_idempotency_key", columnList = "idempotency_key", unique = true)
 })
 @EntityListeners(AuditingEntityListener.class)
@@ -56,7 +56,9 @@ public class TransactionRecord {
     @Column(name = "sender_id", nullable = false)
     private UUID senderId;
 
-    /** Receiving user — null for CASH_IN / CASH_OUT where platform is counterparty. */
+    /**
+     * Receiving user — null for CASH_IN / CASH_OUT where platform is counterparty.
+     */
     @Column(name = "receiver_id")
     private UUID receiverId;
 
@@ -84,7 +86,8 @@ public class TransactionRecord {
     private String stripePayoutId;
 
     /**
-     * Unique key for idempotency — same key = same transaction (deduplicated at insert).
+     * Unique key for idempotency — same key = same transaction (deduplicated at
+     * insert).
      */
     @Column(name = "idempotency_key", nullable = false, unique = true)
     private UUID idempotencyKey;

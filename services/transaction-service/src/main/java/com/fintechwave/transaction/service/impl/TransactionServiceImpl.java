@@ -79,7 +79,7 @@ public class TransactionServiceImpl implements ITransactionService {
             log.warn("Ledger reservation failed for txId={} — aborting: {}", tx.getId(), reserveEx.getMessage());
             tx.setStatus(TransactionStatus.FAILED);
             transactionRepository.save(tx);
-            throw reserveEx; // re-throw so the caller receives the appropriate error
+            throw reserveEx;
         }
 
         publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_INITIATED", 1,
