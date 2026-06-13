@@ -16,24 +16,22 @@ import java.util.UUID;
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class DomainEventConsumer {
+public class TransactionEventConsumer {
 
     private final INotificationService notificationService;
     private final ObjectMapper objectMapper;
 
     @KafkaListener(
-            topics = {"kyc.verification-events", "ledger.wallet-events",
-                      "tx.transaction-events", "fraud.risk-events"},
-            groupId = "notification-service",
+            topics = {"tx.transaction-events"},
+            groupId = "notification-service-tx",
             containerFactory = "kafkaListenerContainerFactory"
     )
-    public void onDomainEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
+    public void onTransactionEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
             String eventType       = root.path("eventType").asText();
             String idempotencyKeyStr = root.path("idempotencyKey").asText();
 
-            // Guard: if idempotencyKey is missing/blank, skip gracefully
             if (idempotencyKeyStr == null || idempotencyKeyStr.isBlank()) {
                 log.warn("Notification consumer: missing idempotencyKey for eventType={} topic={} — skipping",
                         eventType, record.topic());
@@ -54,37 +52,6 @@ public class DomainEventConsumer {
             log.debug("Notification consumer received: eventType={} topic={}", eventType, record.topic());
 
             switch (eventType) {
-                case "KYC_VERIFIED" -> {
-                    UUID userId = parseUUID(root.path("payload").path("userId").asText(), eventType);
-                    if (userId == null) break;
-                    notificationService.send(
-                            idempotencyKey, userId, NotificationChannel.EMAIL,
-                            "KYC_VERIFIED",
-                            "Your KYC verification is approved",
-                            "Congratulations! Your identity has been verified and your wallet is ready."
-                    );
-                }
-                case "KYC_REJECTED" -> {
-                    UUID userId = parseUUID(root.path("payload").path("userId").asText(), eventType);
-                    if (userId == null) break;
-                    String reason = root.path("payload").path("rejectionReason").asText("Please resubmit your documents.");
-                    notificationService.send(
-                            idempotencyKey, userId, NotificationChannel.EMAIL,
-                            "KYC_REJECTED",
-                            "Your KYC verification was not approved",
-                            "Unfortunately your verification was rejected. Reason: " + reason
-                    );
-                }
-                case "WALLET_PROVISIONED" -> {
-                    UUID userId = parseUUID(root.path("payload").path("userId").asText(), eventType);
-                    if (userId == null) break;
-                    notificationService.send(
-                            idempotencyKey, userId, NotificationChannel.EMAIL,
-                            "WALLET_PROVISIONED",
-                            "Welcome to FintechWave!",
-                            "Your wallet has been created and is ready to use."
-                    );
-                }
                 case "TRANSFER_COMPLETED" -> {
                     UUID senderId   = parseUUID(root.path("payload").path("senderId").asText(), eventType);
                     if (senderId == null) break;
@@ -98,7 +65,6 @@ public class DomainEventConsumer {
                     );
                 }
                 case "TRANSFER_FAILED" -> {
-                    // TRANSFER_FAILED payload contains 'senderId', not 'userId'
                     UUID senderId = parseUUID(root.path("payload").path("senderId").asText(), eventType);
                     if (senderId == null) break;
                     notificationService.send(
@@ -106,16 +72,6 @@ public class DomainEventConsumer {
                             "TRANSFER_FAILED",
                             "Transfer Failed",
                             "Your transfer could not be completed. Any reserved funds have been returned."
-                    );
-                }
-                case "TRANSACTION_FLAGGED" -> {
-                    UUID userId = parseUUID(root.path("payload").path("userId").asText(), eventType);
-                    if (userId == null) break;
-                    notificationService.send(
-                            idempotencyKey, userId, NotificationChannel.EMAIL,
-                            "TRANSACTION_FLAGGED",
-                            "Security Alert \u2014 Transaction Under Review",
-                            "A transaction on your account has been flagged for review. If this was not you, contact support immediately."
                     );
                 }
                 case "CASH_IN_COMPLETED" -> {
@@ -163,10 +119,6 @@ public class DomainEventConsumer {
         }
     }
 
-    /**
-     * Safely parses a UUID string. Logs a warning and returns null if the value is
-     * blank or malformed, preventing a poisoned Kafka message from blocking the partition.
-     */
     private UUID parseUUID(String value, String eventType) {
         if (value == null || value.isBlank()) {
             log.warn("Notification consumer: missing UUID field for eventType={}", eventType);

@@ -40,9 +40,6 @@ public class KycOutboxRelay {
                 log.debug("Outbox event relayed: eventType={} aggregateId={}", event.getEventType(),
                         event.getAggregateId());
             } catch (Exception e) {
-                // Log and continue — this event will be retried on the next relay tick.
-                // Do NOT throw here as that would prevent subsequent events in the batch
-                // from being published and could cause Kafka retry storms.
                 log.error("Failed to relay KYC outbox event: id={} eventType={} — will retry on next cycle",
                         event.getId(), event.getEventType(), e);
             }

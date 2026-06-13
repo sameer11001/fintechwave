@@ -23,29 +23,26 @@ import java.util.UUID;
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class ReportingEventConsumer {
+public class TransactionEventConsumer {
 
     private final TransactionSummaryRepository txSummaryRepo;
     private final DailyVolumeRepository dailyVolumeRepo;
-    private final BalanceSnapshotRepository balanceSnapshotRepo;
-    private final KycStatusSummaryRepository kycStatusRepo;
     private final FailedTxRateRepository failedTxRateRepo;
     private final ProcessedEventRepository processedEventRepo;
     private final ObjectMapper objectMapper;
 
     @KafkaListener(
-            topics = {"tx.transaction-events", "ledger.wallet-events", "kyc.verification-events"},
-            groupId = "reporting-service",
+            topics = {"tx.transaction-events"},
+            groupId = "reporting-service-tx",
             containerFactory = "kafkaListenerContainerFactory"
     )
     @Transactional
-    public void onEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
+    public void onTransactionEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
             String eventType       = root.path("eventType").asText();
             UUID   idempotencyKey  = UUID.fromString(root.path("idempotencyKey").asText());
 
-            // ── Idempotency guard ────────────────────────────────────────────
             try {
                 processedEventRepo.save(ProcessedEvent.builder()
                         .idempotencyKey(idempotencyKey)
@@ -60,7 +57,6 @@ public class ReportingEventConsumer {
             JsonNode payload = root.path("payload");
 
             switch (eventType) {
-                // ─── Transaction events ──────────────────────────────────────
                 case "TRANSFER_COMPLETED", "TRANSFER_REVERSED" ->
                         upsertTxSummary(payload, "P2P_TRANSFER",
                                 "TRANSFER_COMPLETED".equals(eventType) ? "COMPLETED" : "REVERSED", false);
@@ -86,55 +82,20 @@ public class ReportingEventConsumer {
                 case "BILL_PAY_FAILED" ->
                         upsertTxSummary(payload, "BILL_PAY", "FAILED", true);
 
-                // ─── Ledger events ───────────────────────────────────────────
-                case "LEDGER_ENTRY_COMMITTED" -> {
-                    UUID userId    = UUID.fromString(payload.path("userId").asText());
-                    UUID accountId = UUID.fromString(payload.path("accountId").asText());
-                    BigDecimal balance  = new BigDecimal(payload.path("balance").asText("0"));
-                    String currency     = payload.path("currency").asText("USD");
-
-                    balanceSnapshotRepo.save(BalanceSnapshot.builder()
-                            .userId(userId)
-                            .accountId(accountId)
-                            .balance(balance)
-                            .currency(currency)
-                            .snapshotAt(Instant.now())
-                            .build());
-                }
-
-                // ─── KYC events ──────────────────────────────────────────────
-                case "KYC_SUBMITTED" -> {
-                    UUID userId = UUID.fromString(payload.path("userId").asText());
-                    upsertKycStatus(userId, "PENDING", Instant.now(), null);
-                }
-
-                case "KYC_VERIFIED" -> {
-                    UUID userId = UUID.fromString(payload.path("userId").asText());
-                    upsertKycStatus(userId, "VERIFIED", null, Instant.now());
-                }
-
-                case "KYC_REJECTED" -> {
-                    UUID userId = UUID.fromString(payload.path("userId").asText());
-                    upsertKycStatus(userId, "REJECTED", null, Instant.now());
-                }
-
-                default -> log.debug("Reporting: no projection for eventType={}", eventType);
+                default -> log.debug("Reporting: no projection for transaction eventType={}", eventType);
             }
 
             ack.acknowledge();
 
         } catch (Exception ex) {
-            log.error("Reporting consumer error: topic={} offset={}", record.topic(), record.offset(), ex);
-            throw new RuntimeException("Reporting event processing failed", ex);
+            log.error("Reporting transaction consumer error: topic={} offset={}", record.topic(), record.offset(), ex);
+            throw new RuntimeException("Reporting transaction event processing failed", ex);
         }
     }
-
-    // ─── Read model helpers ───────────────────────────────────────────────────
 
     private void upsertTxSummary(JsonNode payload, String txType, String status, boolean failed) {
         UUID transactionId = UUID.fromString(payload.path("transactionId").asText());
         if (txSummaryRepo.existsByTransactionId(transactionId)) {
-            // Update status only if record already exists (e.g. INITIATED → COMPLETED)
             txSummaryRepo.findByTransactionId(transactionId).ifPresent(s -> {
                 s.setStatus(status);
                 txSummaryRepo.save(s);
@@ -160,12 +121,10 @@ public class ReportingEventConsumer {
                 .occurredAt(Instant.now())
                 .build());
 
-        // Update daily volume (completed only)
         if (!failed) {
             upsertDailyVolume(txType, amount, currency);
         }
 
-        // Update failed tx rate
         updateFailedTxRate(failed);
     }
 
@@ -202,22 +161,6 @@ public class ReportingEventConsumer {
                 .totalCount(1L)
                 .failedCount(failed ? 1L : 0L)
                 .failureRate(failed ? BigDecimal.ONE : BigDecimal.ZERO)
-                .updatedAt(Instant.now())
-                .build()));
-    }
-
-    private void upsertKycStatus(UUID userId, String status, Instant submittedAt, Instant decidedAt) {
-        kycStatusRepo.findByUserId(userId).ifPresentOrElse(summary -> {
-            summary.setKycStatus(status);
-            if (submittedAt != null) summary.setSubmittedAt(submittedAt);
-            if (decidedAt != null)   summary.setDecidedAt(decidedAt);
-            summary.setUpdatedAt(Instant.now());
-            kycStatusRepo.save(summary);
-        }, () -> kycStatusRepo.save(KycStatusSummary.builder()
-                .userId(userId)
-                .kycStatus(status)
-                .submittedAt(submittedAt)
-                .decidedAt(decidedAt)
                 .updatedAt(Instant.now())
                 .build()));
     }
