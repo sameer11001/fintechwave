@@ -22,10 +22,10 @@ public interface UserProfileRepository extends JpaRepository<UserProfile, UUID> 
     boolean existsByEmail(String email);
 
     @Modifying
-    @Query("UPDATE UserProfile u SET u.kycTier = :tier WHERE u.id = :userId")
+    @Query("UPDATE UserProfile u SET u.kycTier = :tier WHERE u.keycloakId = :userId")
     int updateKycTier(@Param("userId") UUID userId, @Param("tier") KycTier tier);
 
     @Modifying
-    @Query("UPDATE UserProfile u SET u.stripeCustomerId = :stripeCustomerId WHERE u.id = :userId")
+    @Query("UPDATE UserProfile u SET u.stripeCustomerId = :stripeCustomerId WHERE u.keycloakId = :userId")
     int updateStripeCustomerId(@Param("userId") UUID userId, @Param("stripeCustomerId") String stripeCustomerId);
 }

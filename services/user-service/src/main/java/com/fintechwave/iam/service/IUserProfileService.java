@@ -18,8 +18,8 @@ public interface IUserProfileService {
     UserProfileResponse updateProfile(UUID keycloakId, UpdateUserProfileRequest request);
 
     /** Called by kyc-service after KYCVerified — upgrades the user's KYC tier. */
-    void updateKycTier(UUID userId, String tier);
+    void updateKycTier(UUID keycloakId, String tier);
 
     /** Called by transaction-service on first cash-in — stores Stripe customer reference. */
-    void updateStripeCustomerId(UUID userId, String stripeCustomerId);
+    void updateStripeCustomerId(UUID keycloakId, String stripeCustomerId);
 }

@@ -98,26 +98,26 @@ public class UserProfileServiceImpl implements IUserProfileService {
 
     @Override
     @Transactional
-    public void updateKycTier(UUID userId, String tier) {
+    public void updateKycTier(UUID keycloakId, String tier) {
         KycTier kycTier;
         try {
             kycTier = KycTier.valueOf(tier.toUpperCase());
         } catch (IllegalArgumentException e) {
             throw new KycNotFoundException(tier);
         }
-        int rows = userProfileRepository.updateKycTier(userId, kycTier);
+        int rows = userProfileRepository.updateKycTier(keycloakId, kycTier);
         if (rows == 0)
-            throw new UserNotFoundException(userId);
-        log.info("KYC tier updated: userId={} tier={}", userId, tier);
+            throw new UserNotFoundException(keycloakId);
+        log.info("KYC tier updated: keycloakId={} tier={}", keycloakId, tier);
     }
 
     @Override
     @Transactional
-    public void updateStripeCustomerId(UUID userId, String stripeCustomerId) {
-        int rows = userProfileRepository.updateStripeCustomerId(userId, stripeCustomerId);
+    public void updateStripeCustomerId(UUID keycloakId, String stripeCustomerId) {
+        int rows = userProfileRepository.updateStripeCustomerId(keycloakId, stripeCustomerId);
         if (rows == 0)
-            throw new UserNotFoundException(userId);
-        log.info("Stripe customer linked: userId={}", userId);
+            throw new UserNotFoundException(keycloakId);
+        log.info("Stripe customer linked: keycloakId={}", keycloakId);
     }
 
     private UserProfileResponse toResponse(UserProfile p) {
