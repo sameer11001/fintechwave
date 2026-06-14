@@ -1,4 +1,4 @@
-![FintechWave Platform](docs/images/fintechwave-banner.png)
+![FintechWave Platform](docs/images/fintechwave-banner.jpg)
 
 # FintechWave: Platform Overview
 
