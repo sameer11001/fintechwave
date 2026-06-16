@@ -23,12 +23,23 @@ import java.util.UUID;
 public class TransactionEventConsumer {
     private final ILedgerService ledgerService;
     private final ObjectMapper objectMapper;
+    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     @KafkaListener(topics = "tx.transaction-events", groupId = "ledger-service-tx", containerFactory = "kafkaListenerContainerFactory")
     @Transactional
     public void onTransactionEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
+
+            String eventIdStr = root.path("idempotencyKey").asText();
+            Boolean isNew = redisTemplate.opsForValue()
+                .setIfAbsent("processed:ledger-tx:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+            if (Boolean.FALSE.equals(isNew)) {
+                log.debug("Event {} already processed, skipping", eventIdStr);
+                ack.acknowledge();
+                return;
+            }
+
             String eventType = root.path("eventType").asText();
             UUID transactionId = UUID.fromString(root.path("aggregateId").asText());
             JsonNode payload = root.path("payload");

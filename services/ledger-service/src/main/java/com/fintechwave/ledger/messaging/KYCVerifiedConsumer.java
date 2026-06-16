@@ -19,12 +19,24 @@ public class KYCVerifiedConsumer {
 
     private final ILedgerService ledgerService;
     private final ObjectMapper objectMapper;
+    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     @KafkaListener(topics = "kyc.verification-events", groupId = "ledger-service-kyc", containerFactory = "kafkaListenerContainerFactory")
     @Transactional
     public void onKYCVerified(ConsumerRecord<String, String> record, org.springframework.kafka.support.Acknowledgment ack) {
         try {
-            JsonNode payload = objectMapper.readTree(record.value());
+            JsonNode root = objectMapper.readTree(record.value());
+
+            String eventIdStr = root.path("idempotencyKey").asText();
+            Boolean isNew = redisTemplate.opsForValue()
+                .setIfAbsent("processed:ledger-kyc:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+            if (Boolean.FALSE.equals(isNew)) {
+                log.debug("Event {} already processed, skipping", eventIdStr);
+                ack.acknowledge();
+                return;
+            }
+
+            JsonNode payload = root.path("payload");
             String eventType = payload.path("eventType").asText();
 
             if (!"KYC_VERIFIED".equals(eventType)) {

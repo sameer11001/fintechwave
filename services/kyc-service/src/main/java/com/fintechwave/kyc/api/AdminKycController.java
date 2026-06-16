@@ -2,6 +2,7 @@ package com.fintechwave.kyc.api;
 
 import com.fintechwave.kyc.dto.request.AdminReviewRequest;
 import com.fintechwave.kyc.dto.response.KycApplicationResponse;
+import com.fintechwave.kyc.query.service.KycProjectionService;
 import com.fintechwave.kyc.service.IKycApplicationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -29,33 +30,21 @@ import java.util.UUID;
 public class AdminKycController {
 
     private final IKycApplicationService kycService;
+    private final KycProjectionService queryService;
 
-    /**
-     * GET /api/v1/admin/kyc/applications?status=UNDER_REVIEW&page=0&size=20
-     * Paginated list of KYC applications filtered by status.
-     */
     @GetMapping("/applications")
     public ResponseEntity<Page<KycApplicationResponse>> listApplications(
             @RequestParam(value = "status", required = false) String status,
             Pageable pageable) {
-        return ResponseEntity.ok(kycService.listApplications(status, pageable));
+        return ResponseEntity.ok(queryService.listApplications(status, pageable));
     }
 
-    /**
-     * GET /api/v1/admin/kyc/applications/{applicationId}
-     * Full application detail including document references.
-     */
     @GetMapping("/applications/{applicationId}")
     public ResponseEntity<KycApplicationResponse> getApplication(
             @PathVariable("applicationId") UUID applicationId) {
-        return ResponseEntity.ok(kycService.getApplicationById(applicationId));
+        return ResponseEntity.ok(queryService.getApplicationById(applicationId));
     }
 
-    /**
-     * POST /api/v1/admin/kyc/applications/{applicationId}/review
-     * Approve or reject a KYC application.
-     * COMPLIANCE GATE: Approval triggers KYCVerified event → wallet provisioning.
-     */
     @PostMapping("/applications/{applicationId}/review")
     public ResponseEntity<KycApplicationResponse> reviewApplication(
             @PathVariable("applicationId") UUID applicationId,

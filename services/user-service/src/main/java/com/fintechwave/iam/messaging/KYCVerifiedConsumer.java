@@ -19,11 +19,22 @@ public class KYCVerifiedConsumer {
 
     private final IUserProfileService userProfileService;
     private final ObjectMapper objectMapper;
+    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     @KafkaListener(topics = { "kyc.verification-events" }, groupId = "user-service")
     public void onDomainEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
+
+            String eventIdStr = root.path("idempotencyKey").asText();
+            Boolean isNew = redisTemplate.opsForValue()
+                .setIfAbsent("processed:user-kyc:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+            if (Boolean.FALSE.equals(isNew)) {
+                log.debug("Event {} already processed, skipping", eventIdStr);
+                ack.acknowledge();
+                return;
+            }
+
             String eventType = root.path("eventType").asText();
 
             log.debug("User Service consumer received: eventType={} topic={}", eventType, record.topic());

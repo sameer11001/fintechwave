@@ -38,6 +38,8 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jib.version>3.4.3</jib.version>
         <image.tag>latest</image.tag>
+        <lombok.version>1.18.34</lombok.version>
+        <mapstruct.version>1.6.2</mapstruct.version>
     </properties>
 
     <build>
@@ -50,6 +52,9 @@
                     <configuration>
                         <release>${java.version}</release>
                         <encoding>UTF-8</encoding>
+                        <compilerArgs>
+                            <arg>-parameters</arg>
+                        </compilerArgs>
                     </configuration>
                 </plugin>
                 <plugin>

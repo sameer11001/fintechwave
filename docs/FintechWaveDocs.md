@@ -624,10 +624,12 @@ com.fintechwave.reporting/
 
 ---
 
-### Phase 4 — Production Hardening 🔲
+### Phase 4 — Production Hardening & CQRS Migration 🔲
 
+- ✅ **Debezium CDC** replaces `@Scheduled` Outbox relay (Kafka Connect implemented)
+- ✅ **Distributed CQRS Architecture** across `user-service`, `transaction-service`, `ledger-service`, and `kyc-service` (using MongoDB + Redis for read-models)
+- ✅ **Elasticsearch** integrated into `reporting-service` for advanced reporting views
 - Kubernetes manifests (`infra/`) — Deployments, Services, HPAs, Secrets
-- Debezium CDC replaces `@Scheduled` Outbox relay
 - Prometheus + Grafana (metrics)
 - OpenTelemetry + Grafana Tempo (distributed tracing)
 - Grafana Loki (log aggregation)
@@ -649,16 +651,19 @@ com.fintechwave.reporting/
 | Keycloak             | 8180 → 8080         | KRaft mode, no Zookeeper dependency |
 | Config Server        | 8888                |                                     |
 | API Gateway          | 8080                |                                     |
-| user-service         | 8081                |                                     |
+| user-service         | 8081                | Uses MongoDB/Redis for read-models  |
 | kyc-service          | 8082                | MinIO bucket: `kyc-documents`       |
 | ledger-service       | 8083                | Double-entry core                   |
 | transaction-service  | 8084                | Stripe adapter, webhook receiver    |
 | fraud-service        | 8085                | Phase 3 — Redis velocity checks     |
 | notification-service | 8086                | Phase 3 — SendGrid/Twilio/FCM       |
 | reporting-service    | 8087                | Phase 3 — event-sourced read models |
-| PostgreSQL           | 5432                |                                     |
-| Redis                | 6379                |                                     |
+| PostgreSQL           | 5432                | Primary ACID Database               |
+| Redis                | 6379                | Caching / Fraud sliding windows     |
 | Kafka                | 29092 (host) / 9092 | KRaft mode (no Zookeeper)           |
+| Kafka Connect        | 8088                | Debezium CDC for outbox             |
+| MongoDB              | 27017               | CQRS Read Models (`views`)          |
+| Elasticsearch        | 9200                | Reporting read-models               |
 | MinIO API            | 9000                |                                     |
 | MinIO Console        | 9001                |                                     |
 
@@ -673,7 +678,8 @@ com.fintechwave.reporting/
 | transaction-service  | `fintechwave_tx`     | Flyway V1 (`transactions` …)                   |
 | fraud-service        | `fintechwave_fraud`  | Phase 3                                        |
 | notification-service | `fintechwave_notif`  | Phase 3                                        |
-| reporting-service    | `fintechwave_report` | Phase 3                                        |
+| reporting-service    | `fintechwave_report` | Phase 3 (Postgres + Elasticsearch)             |
+| CQRS Read Models     | `fintechwave_views`  | MongoDB Database                               |
 
 ---
 
@@ -723,7 +729,7 @@ Full reference: `.agents/skills/code-standards.md`
 | Settlement domain                    | Deferred — depends on external gateway model                                   | Phase 4 |
 | Merchant Pay                         | Deferred                                                                       | Future  |
 | QR Payment                           | Deferred                                                                       | Future  |
-| Debezium CDC                         | `@Scheduled` Outbox relay shipped in Phase 2; replace with CDC in Phase 4      | Phase 4 |
+| Debezium CDC                         | ✅ **Done in Phase 4** — replaced `@Scheduled` Outbox relay with Kafka Connect | —       |
 | Tap Payments full integration        | `PaymentGatewayPort` adapter scaffolded; full impl when Stripe payout gaps hit | Phase 3 |
 | Kubernetes Secrets + HashiCorp Vault | Phase 4                                                                        | Phase 4 |
 | KYC AES-256 PII encryption           | Documents in MinIO (UUID keys); field-level encryption deferred to Phase 4     | Phase 4 |

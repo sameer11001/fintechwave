@@ -3,6 +3,11 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: fintechwave-postgres
+    command: >
+      postgres
+        -c wal_level=logical
+        -c max_wal_senders=4
+        -c max_replication_slots=4
     environment:
       POSTGRES_USER:     postgres
       POSTGRES_PASSWORD: ${DB_PASS:-postgres}
@@ -136,6 +141,81 @@ services:
       retries: 5
     restart: no
 
+# ─── CQRS Infrastructure ──────────────────────────────────────────────────────
+
+  kafka-connect:
+    image: debezium/connect:2.7.3.Final
+    container_name: fintechwave-kafka-connect
+    environment:
+      BOOTSTRAP_SERVERS:        kafka:9092
+      GROUP_ID:                 fintechwave-connect
+      CONFIG_STORAGE_TOPIC:     connect.configs
+      OFFSET_STORAGE_TOPIC:     connect.offsets
+      STATUS_STORAGE_TOPIC:     connect.status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+    ports:
+      - "8088:8083"
+    networks:
+      - fintechwave
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  debezium-init:
+    image: curlimages/curl:latest
+    container_name: fintechwave-debezium-init
+    depends_on:
+      - kafka-connect
+    networks:
+      - fintechwave
+    volumes:
+      - ./debezium:/debezium:ro
+    command: ["sh", "/debezium/register-connectors.sh"]
+
+  mongodb:
+    image: mongo:7.0
+    container_name: fintechwave-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-mongoroot}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS:-mongopassword}
+      MONGO_INITDB_DATABASE:      fintechwave_views
+    ports:
+      - "27017:27017"
+    command: mongod --wiredTigerCacheSizeGB 1 --logpath /var/log/mongodb/mongod.log --logappend --setParameter logLevel=1
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.18.8
+    container_name: fintechwave-elasticsearch
+    environment:
+      discovery.type:            single-node
+      xpack.security.enabled:    "false"
+      ES_JAVA_OPTS:              "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -v 'red' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
   minio:
     image: minio/minio:latest
     container_name: fintechwave-minio
@@ -199,6 +279,9 @@ services:
       DB_PASS:             ${DB_PASS:-postgres}
       KEYCLOAK_URL:        http://keycloak:8080
       KAFKA_BOOTSTRAP:     kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
     ports:
       - "8081:8081"
     networks:
@@ -232,6 +315,9 @@ services:
       DB_PASS:             ${DB_PASS:-postgres}
       KEYCLOAK_URL:        http://keycloak:8080
       KAFKA_BOOTSTRAP:     kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
       MINIO_ENDPOINT:      http://minio:9000
       MINIO_ACCESS_KEY:    ${MINIO_ROOT_USER:-minioadmin}
       MINIO_SECRET_KEY:    ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -268,6 +354,9 @@ services:
       DB_PASS:             ${DB_PASS:-postgres}
       KEYCLOAK_URL:        http://keycloak:8080
       KAFKA_BOOTSTRAP:     kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
     ports:
       - "8083:8083"
     networks:
@@ -301,6 +390,9 @@ services:
       DB_PASS:                 ${DB_PASS:-postgres}
       KEYCLOAK_URL:            http://keycloak:8080
       KAFKA_BOOTSTRAP:         kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
       LEDGER_SERVICE_HOST:     ledger-service
       STRIPE_API_KEY:          ${STRIPE_API_KEY:-sk_test_51Tg6jpFYLnavoJLBI9Wngbq7jwmmU2FsOztcX3VJWHKCa538C4K8u3VPb5p413UizHOjIZFx9Z3ikA7IQxQM0AGf00OpdNmv2X}
       STRIPE_WEBHOOK_SECRET:   ${STRIPE_WEBHOOK_SECRET:-whsec_4e48d4fec09ffb4c2fec97d4a600c5fdfeb83c5b033644b88fc3b503fc5f3e55}
@@ -339,6 +431,9 @@ services:
       KAFKA_BOOTSTRAP:     kafka:9092
       REDIS_HOST:          redis
       REDIS_PORT:          6379
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
     ports:
       - "8085:8085"
     networks:
@@ -374,6 +469,8 @@ services:
       DB_PASS:              ${DB_PASS:-postgres}
       KEYCLOAK_URL:         http://keycloak:8080
       KAFKA_BOOTSTRAP:      kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
       SMTP_HOST:            ${SMTP_HOST:-smtp.sendgrid.net}
       SMTP_PORT:            ${SMTP_PORT:-587}
       SMTP_USERNAME:        ${SMTP_USERNAME:-apikey}
@@ -405,13 +502,11 @@ services:
     container_name: fintechwave-reporting
     environment:
       CONFIG_SERVER_URI:   http://config-server:8888
-      DB_HOST:             postgres
-      DB_PORT:             5432
-      DB_NAME:             fintechwave_report
-      DB_USER:             postgres
-      DB_PASS:             ${DB_PASS:-postgres}
       KEYCLOAK_URL:        http://keycloak:8080
       KAFKA_BOOTSTRAP:     kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
     ports:
       - "8087:8087"
     networks:
@@ -437,6 +532,8 @@ volumes:
   postgres-data:
   keycloak-db-data:
   minio-data:
+  mongodb-data:
+  elasticsearch-data:
 
 networks:
   fintechwave:

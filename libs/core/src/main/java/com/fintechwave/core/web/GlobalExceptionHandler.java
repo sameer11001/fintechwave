@@ -18,6 +18,12 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.oauth2.jwt.JwtValidationException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.Map;
 import java.util.Objects;
@@ -94,6 +100,13 @@ public class GlobalExceptionHandler {
                                                 "Missing required parameter: " + ex.getParameterName()));
         }
 
+        @ExceptionHandler(IllegalArgumentException.class)
+        public ResponseEntity<ApiResponse<Void>> handleIllegalArgument(IllegalArgumentException ex) {
+                log.warn("Illegal argument: {}", ex.getMessage());
+                return ResponseEntity.badRequest()
+                                .body(ApiResponse.error("BAD_REQUEST", ex.getMessage()));
+        }
+
         @ExceptionHandler(MissingRequestHeaderException.class)
         public ResponseEntity<ApiResponse<Void>> handleMissingHeader(MissingRequestHeaderException ex) {
                 log.warn("Missing required header: {}", ex.getHeaderName());
@@ -102,7 +115,6 @@ public class GlobalExceptionHandler {
                                                 "Missing required header: " + ex.getHeaderName()));
         }
 
-        /** Spring 6 / Boot 3 replacement for NoHandlerFoundException. */
         @ExceptionHandler(NoResourceFoundException.class)
         public ResponseEntity<ApiResponse<Void>> handleNoRoute(NoResourceFoundException ex) {
                 return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -130,6 +142,56 @@ public class GlobalExceptionHandler {
                 return ResponseEntity.status(HttpStatus.CONFLICT)
                                 .body(ApiResponse.error("DATA_INTEGRITY_VIOLATION",
                                                 "A duplicate or conflicting record already exists"));
+        }
+
+        @ExceptionHandler(OptimisticLockingFailureException.class)
+        public ResponseEntity<ApiResponse<Void>> handleOptimisticLockingFailure(OptimisticLockingFailureException ex) {
+                log.warn("Optimistic locking failure: {}", ex.getMessage());
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                                .body(ApiResponse.error("CONFLICT",
+                                                "The record was updated by another transaction. Please refresh and try again."));
+        }
+
+        // ── Web / Protocol Exceptions ─────────────────────────────────────────────
+
+        @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+        public ResponseEntity<ApiResponse<Void>> handleMethodNotSupported(HttpRequestMethodNotSupportedException ex) {
+                log.warn("Method not supported: {}", ex.getMessage());
+                return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
+                                .body(ApiResponse.error("METHOD_NOT_ALLOWED", ex.getMessage()));
+        }
+
+        @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+        public ResponseEntity<ApiResponse<Void>> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException ex) {
+                log.warn("Media type not supported: {}", ex.getMessage());
+                return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                                .body(ApiResponse.error("UNSUPPORTED_MEDIA_TYPE", ex.getMessage()));
+        }
+
+        @ExceptionHandler(MaxUploadSizeExceededException.class)
+        public ResponseEntity<ApiResponse<Void>> handleMaxSizeException(MaxUploadSizeExceededException ex) {
+                log.warn("File size exceeded: {}", ex.getMessage());
+                return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                                .body(ApiResponse.error("PAYLOAD_TOO_LARGE",
+                                                "The uploaded file exceeds the maximum allowed size."));
+        }
+
+        // ── Additional Security Exceptions ────────────────────────────────────────
+
+        @ExceptionHandler(AuthenticationException.class)
+        public ResponseEntity<ApiResponse<Void>> handleAuthenticationException(AuthenticationException ex) {
+                log.warn("Authentication failed: {}", ex.getMessage());
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                                .body(ApiResponse.error("UNAUTHORIZED",
+                                                "Invalid or missing authentication credentials"));
+        }
+
+        @ExceptionHandler(JwtValidationException.class)
+        public ResponseEntity<ApiResponse<Void>> handleJwtValidation(JwtValidationException ex) {
+                log.warn("Keycloak JWT validation failed downstream: {}", ex.getMessage());
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                                .body(ApiResponse.error("TOKEN_EXPIRED_OR_INVALID",
+                                                "The authentication token failed validation checks."));
         }
 
         // ── Catch-all ─────────────────────────────────────────────────────────────

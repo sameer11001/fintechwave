@@ -4,6 +4,7 @@ import com.fintechwave.kyc.domain.enums.DocumentType;
 import com.fintechwave.kyc.dto.request.SubmitKycRequest;
 import com.fintechwave.kyc.dto.response.KycApplicationResponse;
 import com.fintechwave.kyc.dto.response.KycDocumentResponse;
+import com.fintechwave.kyc.query.service.KycProjectionService;
 import com.fintechwave.kyc.service.IKycApplicationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -25,12 +26,13 @@ import java.util.UUID;
 public class KycController {
 
     private final IKycApplicationService kycService;
+    private final KycProjectionService queryService;
 
     @GetMapping("/me")
     public ResponseEntity<KycApplicationResponse> getMyApplication(
             @AuthenticationPrincipal Jwt jwt) {
         UUID userId = UUID.fromString(jwt.getSubject());
-        return ResponseEntity.ok(kycService.getMyApplication(userId));
+        return ResponseEntity.ok(queryService.getMyApplication(userId));
     }
 
     /**

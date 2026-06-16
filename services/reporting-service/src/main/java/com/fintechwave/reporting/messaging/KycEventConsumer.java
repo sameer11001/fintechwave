@@ -2,20 +2,14 @@ package com.fintechwave.reporting.messaging;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fintechwave.reporting.domain.entity.KycStatusSummary;
-import com.fintechwave.reporting.domain.entity.ProcessedEvent;
-import com.fintechwave.reporting.repository.KycStatusSummaryRepository;
-import com.fintechwave.reporting.repository.ProcessedEventRepository;
+import com.fintechwave.reporting.service.SearchIndexingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.UUID;
 
 @Component
@@ -23,52 +17,34 @@ import java.util.UUID;
 @Slf4j
 public class KycEventConsumer {
 
-    private final KycStatusSummaryRepository kycStatusRepo;
-    private final ProcessedEventRepository processedEventRepo;
     private final ObjectMapper objectMapper;
+    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final SearchIndexingService searchIndexingService;
 
-    @KafkaListener(
-            topics = {"kyc.verification-events"},
-            groupId = "reporting-service-kyc",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
-    @Transactional
+    @KafkaListener(topics = {
+            "kyc.verification-events" }, groupId = "reporting-service-kyc", containerFactory = "kafkaListenerContainerFactory")
     public void onKycEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
-            String eventType       = root.path("eventType").asText();
-            UUID   idempotencyKey  = UUID.fromString(root.path("idempotencyKey").asText());
 
-            try {
-                processedEventRepo.save(ProcessedEvent.builder()
-                        .idempotencyKey(idempotencyKey)
-                        .processedAt(Instant.now())
-                        .build());
-            } catch (DataIntegrityViolationException ex) {
-                log.debug("Reporting: duplicate event skipped eventType={} key={}", eventType, idempotencyKey);
+            String eventIdStr = root.path("idempotencyKey").asText();
+            Boolean isNew = redisTemplate.opsForValue()
+                    .setIfAbsent("processed:report-kyc:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+            if (Boolean.FALSE.equals(isNew)) {
+                log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();
                 return;
             }
 
+            String eventType = root.path("eventType").asText();
             JsonNode payload = root.path("payload");
 
-            switch (eventType) {
-                case "KYC_SUBMITTED" -> {
-                    UUID userId = UUID.fromString(payload.path("userId").asText());
-                    upsertKycStatus(userId, "PENDING", Instant.now(), null);
-                }
-
-                case "KYC_VERIFIED" -> {
-                    UUID userId = UUID.fromString(payload.path("userId").asText());
-                    upsertKycStatus(userId, "VERIFIED", null, Instant.now());
-                }
-
-                case "KYC_REJECTED" -> {
-                    UUID userId = UUID.fromString(payload.path("userId").asText());
-                    upsertKycStatus(userId, "REJECTED", null, Instant.now());
-                }
-
-                default -> log.debug("Reporting: no projection for kyc eventType={}", eventType);
+            if ("KYC_VERIFIED".equals(eventType)) {
+                UUID userId = UUID.fromString(payload.path("userId").asText());
+                String kycTier = payload.has("kycTier") ? payload.path("kycTier").asText() : "TIER_1";
+                searchIndexingService.indexKycUpdate(userId, kycTier);
+            } else {
+                log.debug("Reporting: ignoring kyc eventType={} as it doesn't affect ES index", eventType);
             }
 
             ack.acknowledge();
@@ -77,21 +53,5 @@ public class KycEventConsumer {
             log.error("Reporting kyc consumer error: topic={} offset={}", record.topic(), record.offset(), ex);
             throw new RuntimeException("Reporting kyc event processing failed", ex);
         }
-    }
-
-    private void upsertKycStatus(UUID userId, String status, Instant submittedAt, Instant decidedAt) {
-        kycStatusRepo.findByUserId(userId).ifPresentOrElse(summary -> {
-            summary.setKycStatus(status);
-            if (submittedAt != null) summary.setSubmittedAt(submittedAt);
-            if (decidedAt != null)   summary.setDecidedAt(decidedAt);
-            summary.setUpdatedAt(Instant.now());
-            kycStatusRepo.save(summary);
-        }, () -> kycStatusRepo.save(KycStatusSummary.builder()
-                .userId(userId)
-                .kycStatus(status)
-                .submittedAt(submittedAt)
-                .decidedAt(decidedAt)
-                .updatedAt(Instant.now())
-                .build()));
     }
 }

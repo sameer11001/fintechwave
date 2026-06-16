@@ -120,7 +120,8 @@ public class GatewayApplication {
                                                                                 LocalDateTime.now().toString())
                                                                 .retry(retryConfig -> retryConfig
                                                                                 .setRetries(3)
-                                                                                .setMethods(HttpMethod.GET)
+                                                                                .setMethods(HttpMethod.GET,
+                                                                                                HttpMethod.OPTIONS)
                                                                                 .setBackoff(Duration.ofMillis(100),
                                                                                                 Duration.ofMillis(1000),
                                                                                                 2, true))

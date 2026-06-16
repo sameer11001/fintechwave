@@ -2,6 +2,7 @@ package com.fintechwave.ledger.api;
 
 import com.fintechwave.core.web.ApiResponse;
 import com.fintechwave.ledger.dto.response.WalletResponse;
+import com.fintechwave.ledger.query.service.WalletProjectionService;
 import com.fintechwave.ledger.service.ILedgerService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -20,11 +21,12 @@ import java.util.UUID;
 public class LedgerController {
 
     private final ILedgerService ledgerService;
+    private final WalletProjectionService queryService;
 
     @GetMapping("/wallets/{userId}")
     @Operation(summary = "Get wallet balance for a user")
     public ResponseEntity<ApiResponse<WalletResponse>> getWalletBalance(@PathVariable UUID userId) {
-        WalletResponse response = ledgerService.getWalletBalance(userId);
+        WalletResponse response = queryService.getWalletResponse(userId);
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 

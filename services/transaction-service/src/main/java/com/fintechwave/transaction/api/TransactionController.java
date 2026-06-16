@@ -4,6 +4,7 @@ import com.fintechwave.transaction.dto.request.CashInRequest;
 import com.fintechwave.transaction.dto.request.CashOutRequest;
 import com.fintechwave.transaction.dto.request.InitiateTransferRequest;
 import com.fintechwave.transaction.dto.response.TransactionResponse;
+import com.fintechwave.transaction.query.service.TransactionProjectionService;
 import com.fintechwave.transaction.service.ITransactionService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -25,11 +26,8 @@ import java.util.UUID;
 public class TransactionController {
 
     private final ITransactionService transactionService;
+    private final TransactionProjectionService queryService;
 
-    /**
-     * POST /api/v1/transactions/p2p
-     * Initiates a wallet-to-wallet P2P transfer.
-     */
     @PostMapping("/p2p")
     public ResponseEntity<TransactionResponse> initiateP2P(
             @AuthenticationPrincipal Jwt jwt,
@@ -39,11 +37,6 @@ public class TransactionController {
                 .body(transactionService.initiateP2PTransfer(senderId, request));
     }
 
-    /**
-     * POST /api/v1/transactions/cash-in
-     * Creates a Stripe Payment Intent for card funding.
-     * The client must confirm the returned paymentIntentId using Stripe.js.
-     */
     @PostMapping("/cash-in")
     public ResponseEntity<TransactionResponse> initiateCashIn(
             @AuthenticationPrincipal Jwt jwt,
@@ -53,10 +46,6 @@ public class TransactionController {
                 .body(transactionService.initiateCashIn(userId, request));
     }
 
-    /**
-     * POST /api/v1/transactions/cash-out
-     * Initiates a Stripe Instant Payout to the user's saved card.
-     */
     @PostMapping("/cash-out")
     public ResponseEntity<TransactionResponse> initiateCashOut(
             @AuthenticationPrincipal Jwt jwt,
@@ -71,7 +60,7 @@ public class TransactionController {
             @AuthenticationPrincipal Jwt jwt,
             Pageable pageable) {
         UUID userId = UUID.fromString(jwt.getSubject());
-        return ResponseEntity.ok(transactionService.getMyTransactions(userId, pageable));
+        return ResponseEntity.ok(queryService.getUserTransactions(userId, pageable));
     }
 
     @GetMapping("/{id}")
@@ -79,6 +68,20 @@ public class TransactionController {
             @PathVariable UUID id,
             @AuthenticationPrincipal Jwt jwt) {
         UUID callerId = UUID.fromString(jwt.getSubject());
-        return ResponseEntity.ok(transactionService.getTransactionById(id, callerId));
+
+        // TODO: Implement proper authorization checks
+        // In a real CQRS system, you might want to enforce that callerId is either
+        // sender or receiver
+        // The projection service can fetch by id, and then controller can verify
+        // ownership,
+        // or the projection service can do it. For now, fetch by ID.
+
+        TransactionResponse response = queryService.getTransactionById(id);
+
+        if (!response.senderId().equals(callerId) && !response.receiverId().equals(callerId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        }
+
+        return ResponseEntity.ok(response);
     }
 }

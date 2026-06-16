@@ -13,6 +13,8 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.header.writers.XXssProtectionHeaderWriter;
 
 import com.fintechwave.security.converter.KeycloakJwtAuthenticationConverter;
+import com.fintechwave.security.exception.KeycloakAuthenticationEntryPoint;
+
 
 @Configuration
 @EnableWebSecurity
@@ -22,6 +24,7 @@ public class SecurityConfig {
 
     private final JwtDecoder jwtDecoder;
     private final KeycloakJwtAuthenticationConverter keycloakJwtAuthenticationConverter;
+    private final KeycloakAuthenticationEntryPoint keycloakAuthenticationEntryPoint;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -33,7 +36,9 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
                         .requestMatchers("/api/v1/webhooks/**").permitAll()
                         .anyRequest().authenticated())
-                .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt
+                .oauth2ResourceServer(oauth2 -> oauth2
+                        .authenticationEntryPoint(keycloakAuthenticationEntryPoint)
+                        .jwt(jwt -> jwt
                         .decoder(jwtDecoder)
                         .jwtAuthenticationConverter(keycloakJwtAuthenticationConverter)))
                 .headers(headers -> headers

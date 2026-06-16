@@ -3,6 +3,7 @@ package com.fintechwave.iam.api;
 import com.fintechwave.core.web.ApiResponse;
 import com.fintechwave.iam.dto.request.UpdateUserProfileRequest;
 import com.fintechwave.iam.dto.response.UserProfileResponse;
+import com.fintechwave.iam.query.service.UserProfileProjectionService;
 import com.fintechwave.iam.service.IUserProfileService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -23,7 +24,8 @@ import java.util.UUID;
 @Tag(name = "User Profile", description = "User profile management")
 public class UserProfileController {
 
-    private final IUserProfileService userProfileService;
+    private final IUserProfileService userProfileService; // For commands
+    private final UserProfileProjectionService queryService; // For queries
 
     @GetMapping("/me")
     @Operation(summary = "Get the authenticated user's profile")
@@ -31,7 +33,7 @@ public class UserProfileController {
             @AuthenticationPrincipal Jwt jwt) {
 
         UUID keycloakId = UUID.fromString(jwt.getSubject());
-        UserProfileResponse response = userProfileService.findByKeycloakId(keycloakId);
+        UserProfileResponse response = queryService.getUserProfileResponseByKeycloakId(keycloakId);
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
@@ -51,7 +53,7 @@ public class UserProfileController {
     public ResponseEntity<ApiResponse<UserProfileResponse>> getUserById(
             @PathVariable UUID userId) {
 
-        UserProfileResponse response = userProfileService.findById(userId);
+        UserProfileResponse response = queryService.getUserProfileResponse(userId);
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 }

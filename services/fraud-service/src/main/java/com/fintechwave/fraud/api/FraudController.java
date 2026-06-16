@@ -13,9 +13,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
 
-/**
- * Admin-only endpoint for inspecting fraud decisions.
- */
 @RestController
 @RequestMapping("/api/v1/fraud")
 @RequiredArgsConstructor
@@ -23,11 +20,6 @@ public class FraudController {
 
     private final IFraudService fraudService;
 
-    /**
-     * Returns paginated fraud decisions for a given user (ADMIN only).
-     *
-     * GET /api/v1/fraud/decisions?userId=&page=&size=
-     */
     @GetMapping("/decisions")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Page<FraudDecisionResponse>>> getUserDecisions(

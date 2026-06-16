@@ -20,6 +20,7 @@ public class LedgerEventConsumer {
 
     private final INotificationService notificationService;
     private final ObjectMapper objectMapper;
+    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     @KafkaListener(
             topics = {"ledger.wallet-events"},
@@ -29,6 +30,16 @@ public class LedgerEventConsumer {
     public void onLedgerEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
+
+            String eventIdStr = root.path("idempotencyKey").asText();
+            Boolean isNew = redisTemplate.opsForValue()
+                .setIfAbsent("processed:notif-ledger:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+            if (Boolean.FALSE.equals(isNew)) {
+                log.debug("Event {} already processed, skipping", eventIdStr);
+                ack.acknowledge();
+                return;
+            }
+
             String eventType       = root.path("eventType").asText();
             String idempotencyKeyStr = root.path("idempotencyKey").asText();
 

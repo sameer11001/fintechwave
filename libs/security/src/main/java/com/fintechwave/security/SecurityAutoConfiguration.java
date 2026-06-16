@@ -2,6 +2,7 @@ package com.fintechwave.security;
 
 import com.fintechwave.security.config.KeycloakProperties;
 import com.fintechwave.security.converter.KeycloakJwtAuthenticationConverter;
+import com.fintechwave.security.exception.KeycloakAuthenticationEntryPoint;
 import com.fintechwave.security.validator.AudienceValidator;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -29,12 +30,11 @@ public class SecurityAutoConfiguration {
                 .build();
 
         OAuth2TokenValidator<Jwt> withIssuer = JwtValidators.createDefaultWithIssuer(keycloakProperties.getIssuerUri());
-        
+
         if (StringUtils.hasText(keycloakProperties.getExpectedAudience())) {
             OAuth2TokenValidator<Jwt> withAudience = new DelegatingOAuth2TokenValidator<>(
                     withIssuer,
-                    new AudienceValidator(keycloakProperties.getExpectedAudience())
-            );
+                    new AudienceValidator(keycloakProperties.getExpectedAudience()));
             jwtDecoder.setJwtValidator(withAudience);
         } else {
             jwtDecoder.setJwtValidator(withIssuer);
@@ -47,5 +47,11 @@ public class SecurityAutoConfiguration {
     @ConditionalOnMissingBean
     public KeycloakJwtAuthenticationConverter keycloakJwtAuthenticationConverter() {
         return new KeycloakJwtAuthenticationConverter();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakAuthenticationEntryPoint keycloakAuthenticationEntryPoint() {
+        return new KeycloakAuthenticationEntryPoint();
     }
 }
