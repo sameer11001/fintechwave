@@ -1,0 +1,761 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: fintechwave-postgres
+    command: >
+      postgres
+        -c wal_level=logical
+        -c max_wal_senders=4
+        -c max_replication_slots=4
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: ${DB_PASS:-postgres}
+      POSTGRES_DB:       postgres         
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: no
+
+  keycloak-db:
+    image: postgres:16-alpine
+    container_name: fintechwave-keycloak-db
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: ${DB_PASS:-postgres}
+      POSTGRES_DB:       keycloak_db         
+    ports:
+      - "5433:5432"
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: no
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.2
+    container_name: fintechwave-keycloak
+    command: start-dev
+    environment:
+      KC_DB:                    postgres
+      KC_DB_URL:                jdbc:postgresql://keycloak-db:5432/keycloak_db
+      KC_DB_USERNAME:           postgres
+      KC_DB_PASSWORD:           ${DB_PASS:-postgres}
+      KEYCLOAK_ADMIN:           ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD:  ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HTTP_PORT:             8080
+      KC_HOSTNAME_STRICT:       "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_METRICS_ENABLED:       "true"
+      KC_SPI_EVENTSLISTENER_WEBHOOK_URL: "http://host.docker.internal:8081/api/v1/internal/webhook/keycloak/user-registered"
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar"
+      OTEL_SERVICE_NAME:   keycloak
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+    ports:
+      - "8180:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./keycloak/providers:/opt/keycloak/providers
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080;echo -e 'GET /realms/master HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n' >&3;grep -q '200 OK' <&3"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: no
+
+  config-server:
+    image: fintechwave/config-server:latest
+    container_name: fintechwave-config-server
+    environment:
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar -Xmx256m -Xms128m"
+      OTEL_SERVICE_NAME:   config-server
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8888/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: fintechwave-kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
+    ports:
+      - "29092:29092"
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: no
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: fintechwave-redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: no
+
+# ─── CQRS Infrastructure ──────────────────────────────────────────────────────
+
+  kafka-connect:
+    image: debezium/connect:2.7.3.Final
+    container_name: fintechwave-kafka-connect
+    environment:
+      BOOTSTRAP_SERVERS:        kafka:9092
+      GROUP_ID:                 fintechwave-connect
+      CONFIG_STORAGE_TOPIC:     connect.configs
+      OFFSET_STORAGE_TOPIC:     connect.offsets
+      STATUS_STORAGE_TOPIC:     connect.status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+    ports:
+      - "8088:8083"
+    networks:
+      - fintechwave
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  debezium-init:
+    image: curlimages/curl:latest
+    container_name: fintechwave-debezium-init
+    depends_on:
+      - kafka-connect
+    networks:
+      - fintechwave
+    volumes:
+      - ./debezium:/debezium:ro
+    command: ["sh", "/debezium/register-connectors.sh"]
+
+  mongodb:
+    image: mongo:7.0
+    container_name: fintechwave-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-mongoroot}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS:-mongopassword}
+      MONGO_INITDB_DATABASE:      fintechwave_views
+    ports:
+      - "27017:27017"
+    command: mongod --wiredTigerCacheSizeGB 1 --logpath /var/log/mongodb/mongod.log --logappend --setParameter logLevel=1
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.18.8
+    container_name: fintechwave-elasticsearch
+    environment:
+      discovery.type:            single-node
+      xpack.security.enabled:    "false"
+      ES_JAVA_OPTS:              "-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -v 'red' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  minio:
+    image: minio/minio:latest
+    container_name: fintechwave-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - fintechwave
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: no
+
+  # ─── Application Services ─────────────────────────────────────────────────
+
+  gateway:
+    image: fintechwave/gateway:latest
+    container_name: fintechwave-gateway
+    environment:
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar -Xmx256m -Xms128m"
+      OTEL_SERVICE_NAME:   gateway
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+      CONFIG_SERVER_URI:   http://config-server:8888
+      KEYCLOAK_URL:        http://keycloak:8080
+      REDIS_HOST:          redis
+      REDIS_PORT:          6379
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      config-server:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+  user-service:
+    image: fintechwave/user-service:latest
+    container_name: fintechwave-user
+    environment:
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar -Xmx256m -Xms128m"
+      OTEL_SERVICE_NAME:   user-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+      CONFIG_SERVER_URI:   http://config-server:8888
+      DB_HOST:             postgres
+      DB_PORT:             5432
+      DB_NAME:             fintechwave_users
+      DB_USER:             postgres
+      DB_PASS:             ${DB_PASS:-postgres}
+      KEYCLOAK_URL:        http://keycloak:8080
+      KAFKA_BOOTSTRAP:     kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+  kyc-service:
+    image: fintechwave/kyc-service:latest
+    container_name: fintechwave-kyc
+    environment:
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar -Xmx256m -Xms128m"
+      OTEL_SERVICE_NAME:   kyc-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+      CONFIG_SERVER_URI:   http://config-server:8888
+      DB_HOST:             postgres
+      DB_PORT:             5432
+      DB_NAME:             fintechwave_kyc
+      DB_USER:             postgres
+      DB_PASS:             ${DB_PASS:-postgres}
+      KEYCLOAK_URL:        http://keycloak:8080
+      KAFKA_BOOTSTRAP:     kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
+      MINIO_ENDPOINT:      http://minio:9000
+      MINIO_ACCESS_KEY:    ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY:    ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+  ledger-service:
+    image: fintechwave/ledger-service:latest
+    container_name: fintechwave-ledger
+    environment:
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar -Xmx256m -Xms128m"
+      OTEL_SERVICE_NAME:   ledger-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+      CONFIG_SERVER_URI:   http://config-server:8888
+      DB_HOST:             postgres
+      DB_PORT:             5432
+      DB_NAME:             fintechwave_ledger
+      DB_USER:             postgres
+      DB_PASS:             ${DB_PASS:-postgres}
+      KEYCLOAK_URL:        http://keycloak:8080
+      KAFKA_BOOTSTRAP:     kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
+    ports:
+      - "8083:8083"
+    volumes:
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+  transaction-service:
+    image: fintechwave/transaction-service:latest
+    container_name: fintechwave-transaction
+    environment:
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar -Xmx256m -Xms128m"
+      OTEL_SERVICE_NAME:   transaction-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+      CONFIG_SERVER_URI:       http://config-server:8888
+      DB_HOST:                 postgres
+      DB_PORT:                 5432
+      DB_NAME:                 fintechwave_tx
+      DB_USER:                 postgres
+      DB_PASS:                 ${DB_PASS:-postgres}
+      KEYCLOAK_URL:            http://keycloak:8080
+      KAFKA_BOOTSTRAP:         kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
+      LEDGER_SERVICE_HOST:     ledger-service
+      STRIPE_API_KEY:          ${STRIPE_API_KEY:-sk_test_51Tg6jpFYLnavoJLBI9Wngbq7jwmmU2FsOztcX3VJWHKCa538C4K8u3VPb5p413UizHOjIZFx9Z3ikA7IQxQM0AGf00OpdNmv2X}
+      STRIPE_WEBHOOK_SECRET:   ${STRIPE_WEBHOOK_SECRET:-whsec_4e48d4fec09ffb4c2fec97d4a600c5fdfeb83c5b033644b88fc3b503fc5f3e55}
+    ports:
+      - "8084:8084"
+    volumes:
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+  fraud-service:
+    image: fintechwave/fraud-service:latest
+    container_name: fintechwave-fraud
+    environment:
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar -Xmx256m -Xms128m"
+      OTEL_SERVICE_NAME:   fraud-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+      CONFIG_SERVER_URI:   http://config-server:8888
+      DB_HOST:             postgres
+      DB_PORT:             5432
+      DB_NAME:             fintechwave_fraud
+      DB_USER:             postgres
+      DB_PASS:             ${DB_PASS:-postgres}
+      KEYCLOAK_URL:        http://keycloak:8080
+      KAFKA_BOOTSTRAP:     kafka:9092
+      REDIS_HOST:          redis
+      REDIS_PORT:          6379
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+  notification-service:
+    image: fintechwave/notification-service:latest
+    container_name: fintechwave-notification
+    environment:
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar -Xmx256m -Xms128m"
+      OTEL_SERVICE_NAME:   notification-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+      CONFIG_SERVER_URI:    http://config-server:8888
+      DB_HOST:              postgres
+      DB_PORT:              5432
+      DB_NAME:              fintechwave_notif
+      DB_USER:              postgres
+      DB_PASS:              ${DB_PASS:-postgres}
+      KEYCLOAK_URL:         http://keycloak:8080
+      KAFKA_BOOTSTRAP:      kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SMTP_HOST:            ${SMTP_HOST:-smtp.sendgrid.net}
+      SMTP_PORT:            ${SMTP_PORT:-587}
+      SMTP_USERNAME:        ${SMTP_USERNAME:-apikey}
+      SMTP_PASSWORD:        ${SMTP_PASSWORD:-SG.placeholder}
+      NOTIFICATION_FROM_EMAIL: ${NOTIFICATION_FROM_EMAIL:-noreply@fintechwave.com}
+    ports:
+      - "8086:8086"
+    volumes:
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8086/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+  reporting-service:
+    image: fintechwave/reporting-service:latest
+    container_name: fintechwave-reporting
+    environment:
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar -Xmx256m -Xms128m"
+      OTEL_SERVICE_NAME:   reporting-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+      CONFIG_SERVER_URI:   http://config-server:8888
+      KEYCLOAK_URL:        http://keycloak:8080
+      KAFKA_BOOTSTRAP:     kafka:9092
+      SPRING_DATA_REDIS_HOST:  redis
+      SPRING_DATA_REDIS_PORT:  6379
+      SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
+    ports:
+      - "8087:8087"
+    volumes:
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8087/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
+# ─── Observability & Monitoring ───────────────────────────────────────────
+
+  minio-setup:
+    image: minio/mc
+    container_name: fintechwave-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - fintechwave
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin &&
+      (/usr/bin/mc mb myminio/loki-data || true)
+      "
+
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: fintechwave-loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./observability/loki/loki-config.yaml:/etc/loki/local-config.yaml
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - fintechwave
+    depends_on:
+      minio:
+        condition: service_healthy
+      minio-setup:
+        condition: service_completed_successfully
+
+  tempo:
+    image: grafana/tempo:2.4.1
+    container_name: fintechwave-tempo
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./observability/tempo/tempo-config.yaml:/etc/tempo.yaml
+      - tempo-data:/tmp/tempo
+    ports:
+      - "3200:3200"
+      - "4317"  # otlp grpc
+      - "4318"  # otlp http
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - fintechwave
+
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: fintechwave-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --enable-feature=remote-write-receiver
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - fintechwave
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: fintechwave-otel-collector
+    environment:
+      DB_PASS: ${DB_PASS:-postgres}
+      MONGO_USER: ${MONGO_USER:-mongoroot}
+      MONGO_PASS: ${MONGO_PASS:-mongopassword}
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./observability/otel-collector/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317" # OTLP gRPC receiver
+      - "4318:4318" # OTLP HTTP receiver
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - fintechwave
+    depends_on:
+      - loki
+      - tempo
+      - prometheus
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: fintechwave-grafana
+    environment:
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_AUTH_GENERIC_OAUTH_ENABLED=true
+      - GF_AUTH_GENERIC_OAUTH_NAME=Keycloak
+      - GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP=true
+      - GF_AUTH_GENERIC_OAUTH_CLIENT_ID=grafana
+      - GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET=grafana-secret
+      - GF_AUTH_GENERIC_OAUTH_SCOPES=openid profile email roles
+      - GF_AUTH_GENERIC_OAUTH_AUTH_URL=http://localhost:8180/realms/fintechwave/protocol/openid-connect/auth
+      - GF_AUTH_GENERIC_OAUTH_TOKEN_URL=http://keycloak:8080/realms/fintechwave/protocol/openid-connect/token
+      - GF_AUTH_GENERIC_OAUTH_API_URL=http://keycloak:8080/realms/fintechwave/protocol/openid-connect/userinfo
+      - GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH=contains(roles[*], 'admin') && 'Admin' || 'Viewer'
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - fintechwave
+    depends_on:
+      - loki
+      - tempo
+      - prometheus
+
+volumes:
+  postgres-data:
+  keycloak-db-data:
+  minio-data:
+  mongodb-data:
+  elasticsearch-data:
+  tempo-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  fintechwave:
+    driver: bridge

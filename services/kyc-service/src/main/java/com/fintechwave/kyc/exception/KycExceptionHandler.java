@@ -17,8 +17,9 @@ public class KycExceptionHandler extends GlobalExceptionHandler {
 
     // ── KYC-specific: file upload ─────────────────────────────────────────────
 
+    @Override
     @ExceptionHandler(MaxUploadSizeExceededException.class)
-    public ResponseEntity<ApiResponse<Void>> handleMaxUploadSize(MaxUploadSizeExceededException ex) {
+    public ResponseEntity<ApiResponse<Void>> handleMaxSizeException(MaxUploadSizeExceededException ex) {
         log.warn("File upload size exceeded in kyc-service: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
                 .body(ApiResponse.error("FILE_TOO_LARGE",

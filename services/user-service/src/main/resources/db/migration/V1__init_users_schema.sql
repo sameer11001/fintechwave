@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS user_profiles (
     id                       UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     keycloak_id              UUID         NOT NULL UNIQUE,
-    email                    VARCHAR(255) NOT NULL,
+    email                    VARCHAR(255) NOT NULL UNIQUE,
     first_name               VARCHAR(100),
     last_name                VARCHAR(100),
     phone_hash               VARCHAR(64),

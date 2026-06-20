@@ -51,7 +51,7 @@ public class TransactionEventConsumer {
                 case "CASH_OUT_INITIATED" -> handleCashOutInitiated(transactionId, payload);
                 case "CASH_OUT_COMPLETED" -> handleCashOutCompleted(transactionId, payload);
                 case "CASH_OUT_FAILED" -> handleCashOutFailed(transactionId, payload);
-                default -> log.debug("Ledger consumer: unhandled eventType={} txId={}", eventType, transactionId);
+                default -> log.error("UNKNOWN OR MISSING eventType='{}' received on tx.transaction-events. txId={} Message ignored but requires investigation!", eventType, transactionId);
             }
 
             ack.acknowledge();

@@ -36,20 +36,24 @@ public class KYCVerifiedConsumer {
                 return;
             }
 
-            JsonNode payload = root.path("payload");
-            String eventType = payload.path("eventType").asText();
+            String eventType = root.path("eventType").asText();
 
-            if (!"KYC_VERIFIED".equals(eventType)) {
-                log.debug("Ignoring event type={} on kyc.verification-events", eventType);
-                ack.acknowledge();
-                return;
+            switch (eventType) {
+                case "KYC_VERIFIED" -> {
+                    JsonNode payload = root.path("payload");
+                    UUID userId = UUID.fromString(payload.path("userId").asText());
+                    String currency = payload.path("currency").asText("JOD");
+
+                    log.info("KYCVerified received: userId={} — provisioning wallet", userId);
+                    ledgerService.provisionWallet(userId, currency);
+                }
+                case "KYC_CREATED", "KYC_SUBMITTED", "KYC_REJECTED" -> {
+                    log.debug("Ignoring known event type={} on kyc.verification-events", eventType);
+                }
+                default -> {
+                    log.error("UNKNOWN OR MISSING event type='{}' received on kyc.verification-events. Message ignored but requires investigation!", eventType);
+                }
             }
-
-            UUID userId = UUID.fromString(payload.path("payload").path("userId").asText());
-            String currency = payload.path("payload").path("currency").asText("JOD");
-
-            log.info("KYCVerified received: userId={} — provisioning wallet", userId);
-            ledgerService.provisionWallet(userId, currency);
             ack.acknowledge();
 
         } catch (Exception ex) {

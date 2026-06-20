@@ -1,0 +1,32 @@
+{
+  "name": "fintechwave-outbox-kyc",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "plugin.name": "pgoutput",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "postgres",
+    "database.password": "postgres",
+    "database.dbname": "fintechwave_kyc",
+    "topic.prefix": "fintechwave_kyc",
+    "slot.name": "fintechwave_kyc_outbox_slot",
+
+    "table.include.list": "public.kyc_outbox_events",
+
+    "transforms": "outbox",
+    "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+    "transforms.outbox.table.field.event.id": "id",
+    "transforms.outbox.table.field.event.key": "aggregate_id",
+    "transforms.outbox.table.field.event.type": "event_type",
+
+    "transforms.outbox.table.field.event.payload": "payload",
+    "transforms.outbox.route.by.field": "aggregate_type",
+    "transforms.outbox.route.topic.replacement": "kyc.verification-events",
+
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "value.converter": "org.apache.kafka.connect.storage.StringConverter",
+
+    "tombstones.on.delete": "false",
+    "heartbeat.interval.ms": "10000"
+  }
+}

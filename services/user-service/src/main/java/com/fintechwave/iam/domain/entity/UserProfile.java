@@ -32,7 +32,7 @@ public class UserProfile {
     @Column(name = "keycloak_id", nullable = false, unique = true, updatable = false)
     private UUID keycloakId;
 
-    @Column(nullable = false, length = 255)
+    @Column(nullable = false, length = 255, unique = true)
     private String email;
 
     @Column(name = "first_name", length = 100)

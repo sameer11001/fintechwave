@@ -57,6 +57,12 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
                 .build();
         applicationRepository.save(application);
 
+        publishOutboxEvent(application.getId(), "KYC_APPLICATION", "KYC_CREATED", 1,
+                Map.of("userId", userId.toString(),
+                        "status", KycStatus.PENDING_SUBMISSION.name(),
+                        "currentTier", KycTier.TIER_0.name(),
+                        "requestedTier", KycTier.TIER_1.name()));
+
         log.info("KYC shell created: applicationId={}", application.getId());
     }
 
@@ -196,7 +202,8 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
             app.setRejectionReason(request.rejectionReason());
 
             publishOutboxEvent(app.getId(), "KYC_APPLICATION", "KYC_REJECTED", 1,
-                    Map.of("userId", app.getUserId().toString()));
+                    Map.of("userId", app.getUserId().toString(),
+                            "rejectionReason", request.rejectionReason()));
 
             log.info("KYC REJECTED: applicationId={}", applicationId);
         } else {

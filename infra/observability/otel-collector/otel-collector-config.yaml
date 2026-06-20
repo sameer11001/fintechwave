@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=none
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+  postgresql:
+    endpoint: "postgres:5432"
+    transport: "tcp"
+    tls:
+      insecure: true
+    username: "postgres"
+    password: "${env:DB_PASS}"
+    databases: []
+    collection_interval: 15s
+
+  redis:
+    endpoint: "redis:6379"
+    collection_interval: 15s
+
+  kafka_metrics:
+    brokers: ["kafka:9092"]
+    collection_interval: 15s
+    protocol_version: 3.3.1
+
+processors:
+  batch:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 150
+    spike_limit_mib: 50
+  filter/logs:
+    error_mode: ignore
+    logs:
+      log_record:
+        - severity_number < 9
+  transform/logs:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - set(resource.attributes["level"], severity_text)
+
+exporters:
+  prometheus_remote_write:
+    endpoint: "http://prometheus:9090/api/v1/write"
+    tls:
+      insecure: true
+  otlp_http/loki:
+    endpoint: "http://loki:3100/otlp"
+    tls:
+      insecure: true
+  otlp_grpc:
+    endpoint: "tempo:4317"
+    tls:
+      insecure: true
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_grpc]
+    metrics:
+      receivers: [otlp, postgresql, redis, kafka_metrics]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus_remote_write]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/logs, batch]
+      exporters: [otlp_http/loki]

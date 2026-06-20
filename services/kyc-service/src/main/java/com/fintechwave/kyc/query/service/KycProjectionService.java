@@ -65,6 +65,78 @@ public class KycProjectionService {
         return mapToResponse(view);
     }
 
+    public void handleKycCreated(UUID id, UUID userId, String status, String currentTier, String requestedTier) {
+        KycApplicationView view = repository.findById(id).orElseGet(() -> KycApplicationView.builder().id(id).build());
+        view.setUserId(userId);
+        view.setStatus(status);
+        view.setCurrentTier(currentTier);
+        view.setRequestedTier(requestedTier);
+        view.setCreatedAt(java.time.Instant.now());
+        view.setUpdatedAt(java.time.Instant.now());
+        repository.save(view);
+        cacheView(view);
+        log.info("Projected KYC_CREATED for appId={} userId={}", id, userId);
+    }
+
+    public void handleKycSubmitted(UUID id, UUID userId, String status, String requestedTier) {
+        KycApplicationView view = repository.findById(id).orElseGet(() -> KycApplicationView.builder().id(id).build());
+        if (userId != null) {
+            view.setUserId(userId);
+        }
+        view.setStatus(status);
+        view.setRequestedTier(requestedTier);
+        view.setRejectionReason(null);
+        if (view.getCreatedAt() == null) {
+            view.setCreatedAt(java.time.Instant.now());
+        }
+        view.setUpdatedAt(java.time.Instant.now());
+        repository.save(view);
+        cacheView(view);
+        log.info("Projected KYC_SUBMITTED for appId={}", id);
+    }
+
+    public void handleKycVerified(UUID id, UUID userId, String status, String currentTier) {
+        KycApplicationView view = repository.findById(id).orElseGet(() -> KycApplicationView.builder().id(id).build());
+        if (userId != null) {
+            view.setUserId(userId);
+        }
+        view.setStatus(status);
+        view.setCurrentTier(currentTier);
+        if (view.getCreatedAt() == null) {
+            view.setCreatedAt(java.time.Instant.now());
+        }
+        view.setUpdatedAt(java.time.Instant.now());
+        repository.save(view);
+        cacheView(view);
+        log.info("Projected KYC_VERIFIED for appId={}", id);
+    }
+
+    public void handleKycRejected(UUID id, UUID userId, String status, String rejectionReason) {
+        KycApplicationView view = repository.findById(id).orElseGet(() -> KycApplicationView.builder().id(id).build());
+        if (userId != null) {
+            view.setUserId(userId);
+        }
+        view.setStatus(status);
+        view.setRejectionReason(rejectionReason);
+        if (view.getCreatedAt() == null) {
+            view.setCreatedAt(java.time.Instant.now());
+        }
+        view.setUpdatedAt(java.time.Instant.now());
+        repository.save(view);
+        cacheView(view);
+        log.info("Projected KYC_REJECTED for appId={}", id);
+    }
+
+    private void cacheView(KycApplicationView view) {
+        try {
+            String cacheKey = CACHE_PREFIX + view.getUserId();
+            String json = objectMapper.writeValueAsString(view);
+            redisTemplate.opsForValue().set(cacheKey, json, CACHE_TTL);
+        } catch (Exception e) {
+            log.error("Failed to cache KycApplicationView for userId={}", view.getUserId(), e);
+        }
+    }
+
     private KycApplicationResponse mapToResponse(KycApplicationView view) {
         return KycApplicationResponse.builder()
                 .id(view.getId())
