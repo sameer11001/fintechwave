@@ -6,7 +6,6 @@ import com.fintechwave.kyc.service.IKycApplicationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -21,7 +20,6 @@ public class UserRegisteredConsumer {
 
     private final IKycApplicationService kycApplicationService;
     private final ObjectMapper objectMapper;
-    private final StringRedisTemplate redisTemplate;
 
     @KafkaListener(topics = "iam.user-events", groupId = "${spring.kafka.consumer.group-id}", containerFactory = "kafkaListenerContainerFactory")
     @Transactional
@@ -31,16 +29,6 @@ public class UserRegisteredConsumer {
 
             String eventType = event.path("eventType").asText();
             if (!"USER_REGISTERED".equals(eventType)) {
-                ack.acknowledge();
-                return;
-            }
-
-            String idempotencyKeyStr = event.path("idempotencyKey").asText();
-
-            Boolean isNew = redisTemplate.opsForValue()
-                    .setIfAbsent("processed:kyc-user:" + idempotencyKeyStr, "1", java.time.Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
-                log.warn("Duplicate UserRegistered event, skipping: idempotencyKey={}", idempotencyKeyStr);
                 ack.acknowledge();
                 return;
             }

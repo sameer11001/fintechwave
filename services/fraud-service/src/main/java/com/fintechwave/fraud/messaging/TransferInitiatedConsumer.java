@@ -13,10 +13,6 @@ import org.springframework.stereotype.Component;
 import java.math.BigDecimal;
 import java.util.UUID;
 
-/**
- * Consumes TransferInitiated events from tx.transaction-events.
- * Triggers fraud evaluation, which publishes TransactionApproved or TransactionFlagged.
- */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -24,25 +20,11 @@ public class TransferInitiatedConsumer {
 
     private final IFraudService fraudService;
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
-    @KafkaListener(
-            topics = "tx.transaction-events",
-            groupId = "fraud-service",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
+    @KafkaListener(topics = "tx.transaction-events", groupId = "fraud-service", containerFactory = "kafkaListenerContainerFactory")
     public void onTransactionEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
-
-            String eventIdStr = root.path("idempotencyKey").asText();
-            Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:fraud-tx:" + eventIdStr, "1", java.time.Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
-                log.debug("Event {} already processed, skipping", eventIdStr);
-                ack.acknowledge();
-                return;
-            }
 
             String eventType = root.path("eventType").asText();
 
@@ -52,13 +34,13 @@ public class TransferInitiatedConsumer {
                 return;
             }
 
-            UUID transactionId  = UUID.fromString(root.path("aggregateId").asText());
+            UUID transactionId = UUID.fromString(root.path("aggregateId").asText());
             UUID idempotencyKey = UUID.fromString(root.path("idempotencyKey").asText());
 
             JsonNode payload = root.path("payload");
-            UUID userId      = UUID.fromString(payload.path("senderId").asText());
+            UUID userId = UUID.fromString(payload.path("senderId").asText());
             BigDecimal amount = new BigDecimal(payload.path("amount").asText());
-            String currency   = payload.path("currency").asText("USD");
+            String currency = payload.path("currency").asText("USD");
 
             log.info("TransferInitiated received: txId={} userId={} amount={} {}",
                     transactionId, userId, amount, currency);

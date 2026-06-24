@@ -11,6 +11,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -22,25 +23,22 @@ public class LedgerEventConsumer {
     private final ObjectMapper objectMapper;
     private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
-    @KafkaListener(
-            topics = {"ledger.wallet-events"},
-            groupId = "notification-service-ledger",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
+    @KafkaListener(topics = {
+            "ledger.wallet-events" }, groupId = "notification-service-ledger", containerFactory = "kafkaListenerContainerFactory")
     public void onLedgerEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
 
             String eventIdStr = root.path("idempotencyKey").asText();
             Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:notif-ledger:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+                    .setIfAbsent("processed:notif-ledger:" + eventIdStr, "1", Duration.ofDays(7));
             if (Boolean.FALSE.equals(isNew)) {
                 log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();
                 return;
             }
 
-            String eventType       = root.path("eventType").asText();
+            String eventType = root.path("eventType").asText();
             String idempotencyKeyStr = root.path("idempotencyKey").asText();
 
             if (idempotencyKeyStr == null || idempotencyKeyStr.isBlank()) {
@@ -69,8 +67,7 @@ public class LedgerEventConsumer {
                             idempotencyKey, userId, NotificationChannel.EMAIL,
                             "WALLET_PROVISIONED",
                             "Welcome to FintechWave!",
-                            "Your wallet has been created and is ready to use."
-                    );
+                            "Your wallet has been created and is ready to use.");
                 }
             } else {
                 log.debug("No notification mapping for eventType={}", eventType);

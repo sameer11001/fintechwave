@@ -6,6 +6,10 @@ datasources:
     url: http://prometheus:9090
     access: proxy
     isDefault: true
+    jsonData:
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
   - name: Loki
     type: loki
     uid: loki
@@ -14,7 +18,7 @@ datasources:
     jsonData:
       derivedFields:
         - datasourceUid: tempo
-          matcherRegex: "\\[[^,]+,([a-f0-9]+),[a-f0-9]+\\]"
+          matcherRegex: '"trace_id":"(\w+)"'
           name: TraceID
           url: "$${__value.raw}"
   - name: Tempo

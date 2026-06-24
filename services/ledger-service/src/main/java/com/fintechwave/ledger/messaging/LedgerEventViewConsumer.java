@@ -11,6 +11,7 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -32,7 +33,7 @@ public class LedgerEventViewConsumer {
             }
 
             Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:ledger-view:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+                    .setIfAbsent("processed:ledger-view:" + eventIdStr, "1", Duration.ofDays(7));
             if (Boolean.FALSE.equals(isNew)) {
                 log.debug("Event {} already processed for view, skipping", eventIdStr);
                 ack.acknowledge();
@@ -43,10 +44,10 @@ public class LedgerEventViewConsumer {
             JsonNode payload = root.path("payload");
 
             if ("LEDGER_ENTRY_COMMITTED".equals(eventType) || "WALLET_CREATED".equals(eventType)) {
-                UUID userId    = UUID.fromString(payload.path("userId").asText());
+                UUID userId = UUID.fromString(payload.path("userId").asText());
                 UUID accountId = UUID.fromString(payload.path("accountId").asText());
-                BigDecimal balance  = new BigDecimal(payload.path("balance").asText("0"));
-                String currency     = payload.path("currency").asText("USD");
+                BigDecimal balance = new BigDecimal(payload.path("balance").asText("0"));
+                String currency = payload.path("currency").asText("USD");
 
                 projectionService.handleBalanceUpdate(userId, accountId, balance, currency);
             } else {

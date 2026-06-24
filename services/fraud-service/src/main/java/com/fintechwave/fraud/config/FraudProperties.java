@@ -5,7 +5,7 @@ import org.springframework.context.annotation.Configuration;
 
 import java.math.BigDecimal;
 
-@Configuration
+@Configuration(proxyBeanMethods = false)
 @ConfigurationProperties(prefix = "app.fraud")
 public class FraudProperties {
 

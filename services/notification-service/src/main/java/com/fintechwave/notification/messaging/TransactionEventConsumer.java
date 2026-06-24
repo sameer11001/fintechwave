@@ -11,6 +11,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -22,25 +23,22 @@ public class TransactionEventConsumer {
     private final ObjectMapper objectMapper;
     private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
-    @KafkaListener(
-            topics = {"tx.transaction-events"},
-            groupId = "notification-service-tx",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
+    @KafkaListener(topics = {
+            "tx.transaction-events" }, groupId = "notification-service-tx", containerFactory = "kafkaListenerContainerFactory")
     public void onTransactionEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
 
             String eventIdStr = root.path("idempotencyKey").asText();
             Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:notif-tx:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+                    .setIfAbsent("processed:notif-tx:" + eventIdStr, "1", Duration.ofDays(7));
             if (Boolean.FALSE.equals(isNew)) {
                 log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();
                 return;
             }
 
-            String eventType       = root.path("eventType").asText();
+            String eventType = root.path("eventType").asText();
             String idempotencyKeyStr = root.path("idempotencyKey").asText();
 
             if (idempotencyKeyStr == null || idempotencyKeyStr.isBlank()) {
@@ -64,30 +62,31 @@ public class TransactionEventConsumer {
 
             switch (eventType) {
                 case "TRANSFER_COMPLETED" -> {
-                    UUID senderId   = parseUUID(root.path("payload").path("senderId").asText(), eventType);
-                    if (senderId == null) break;
-                    String amount   = root.path("payload").path("amount").asText();
+                    UUID senderId = parseUUID(root.path("payload").path("senderId").asText(), eventType);
+                    if (senderId == null)
+                        break;
+                    String amount = root.path("payload").path("amount").asText();
                     String currency = root.path("payload").path("currency").asText();
                     notificationService.send(
                             idempotencyKey, senderId, NotificationChannel.EMAIL,
                             "TRANSFER_COMPLETED",
                             "Transfer Confirmed",
-                            "Your transfer of " + amount + " " + currency + " has been completed successfully."
-                    );
+                            "Your transfer of " + amount + " " + currency + " has been completed successfully.");
                 }
                 case "TRANSFER_FAILED" -> {
                     UUID senderId = parseUUID(root.path("payload").path("senderId").asText(), eventType);
-                    if (senderId == null) break;
+                    if (senderId == null)
+                        break;
                     notificationService.send(
                             idempotencyKey, senderId, NotificationChannel.EMAIL,
                             "TRANSFER_FAILED",
                             "Transfer Failed",
-                            "Your transfer could not be completed. Any reserved funds have been returned."
-                    );
+                            "Your transfer could not be completed. Any reserved funds have been returned.");
                 }
                 case "CASH_IN_COMPLETED" -> {
                     UUID userId = parseUUID(root.path("payload").path("userId").asText(), eventType);
-                    if (userId == null) break;
+                    if (userId == null)
+                        break;
                     String amount = root.path("payload").path("amount").asText();
                     String ccy = root.path("payload").path("currency").asText();
                     notificationService.send(idempotencyKey, userId, NotificationChannel.EMAIL,
@@ -96,7 +95,8 @@ public class TransactionEventConsumer {
                 }
                 case "CASH_OUT_COMPLETED" -> {
                     UUID userId = parseUUID(root.path("payload").path("userId").asText(), eventType);
-                    if (userId == null) break;
+                    if (userId == null)
+                        break;
                     String amount = root.path("payload").path("amount").asText();
                     String ccy = root.path("payload").path("currency").asText();
                     notificationService.send(idempotencyKey, userId, NotificationChannel.EMAIL,
@@ -105,7 +105,8 @@ public class TransactionEventConsumer {
                 }
                 case "BILL_PAY_COMPLETED" -> {
                     UUID userId = parseUUID(root.path("payload").path("userId").asText(), eventType);
-                    if (userId == null) break;
+                    if (userId == null)
+                        break;
                     String amount = root.path("payload").path("amount").asText();
                     notificationService.send(idempotencyKey, userId, NotificationChannel.EMAIL,
                             "BILL_PAY_COMPLETED", "Bill Payment Successful",
@@ -113,7 +114,8 @@ public class TransactionEventConsumer {
                 }
                 case "CASH_IN_FAILED", "CASH_OUT_FAILED", "BILL_PAY_FAILED" -> {
                     UUID userId = parseUUID(root.path("payload").path("userId").asText(), eventType);
-                    if (userId == null) break;
+                    if (userId == null)
+                        break;
                     notificationService.send(idempotencyKey, userId, NotificationChannel.EMAIL,
                             eventType,
                             "Transaction Failed",

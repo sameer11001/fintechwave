@@ -11,6 +11,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -22,25 +23,22 @@ public class FraudEventConsumer {
     private final ObjectMapper objectMapper;
     private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
-    @KafkaListener(
-            topics = {"fraud.risk-events"},
-            groupId = "notification-service-fraud",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
+    @KafkaListener(topics = {
+            "fraud.risk-events" }, groupId = "notification-service-fraud", containerFactory = "kafkaListenerContainerFactory")
     public void onFraudEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
 
             String eventIdStr = root.path("idempotencyKey").asText();
             Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:notif-fraud:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+                    .setIfAbsent("processed:notif-fraud:" + eventIdStr, "1", Duration.ofDays(7));
             if (Boolean.FALSE.equals(isNew)) {
                 log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();
                 return;
             }
 
-            String eventType       = root.path("eventType").asText();
+            String eventType = root.path("eventType").asText();
             String idempotencyKeyStr = root.path("idempotencyKey").asText();
 
             if (idempotencyKeyStr == null || idempotencyKeyStr.isBlank()) {
@@ -69,8 +67,7 @@ public class FraudEventConsumer {
                             idempotencyKey, userId, NotificationChannel.EMAIL,
                             "TRANSACTION_FLAGGED",
                             "Security Alert \u2014 Transaction Under Review",
-                            "A transaction on your account has been flagged for review. If this was not you, contact support immediately."
-                    );
+                            "A transaction on your account has been flagged for review. If this was not you, contact support immediately.");
                 }
             } else {
                 log.debug("No notification mapping for eventType={}", eventType);

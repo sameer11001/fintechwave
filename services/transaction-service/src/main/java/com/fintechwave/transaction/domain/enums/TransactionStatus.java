@@ -25,5 +25,9 @@ public enum TransactionStatus {
     /** Failed after reservation — RELEASE posting needed. */
     FAILED,
     /** RELEASE posting executed — funds returned to source. */
-    REVERSED
+    REVERSED,
+    /** External payment confirmed, awaiting ledger reconciliation. Not yet safe to show as "done". */
+    PENDING_LEDGER,
+    /** Terminal: funds were returned to the user externally (e.g. Stripe refund). */
+    REFUNDED
 }

@@ -71,8 +71,6 @@ public class TransactionServiceImpl implements ITransactionService {
                         .description(request.description())
                         .build());
 
-        // Synchronous Reservation — if this fails the transaction is marked FAILED
-        // and we throw so the caller gets an appropriate error response.
         try {
             ledgerGrpcClient.reserveFundsSync(tx.getId(), senderId, request.amount().add(fee), request.currency());
         } catch (Exception reserveEx) {
@@ -145,6 +143,16 @@ public class TransactionServiceImpl implements ITransactionService {
                         .description("Cash-out to card")
                         .build());
 
+        try {
+            ledgerGrpcClient.reserveFundsSync(tx.getId(), userId, request.amount().add(fee), request.currency());
+        } catch (Exception reserveEx) {
+            log.warn("Ledger reservation failed for cash-out txId={} — aborting: {}", tx.getId(),
+                    reserveEx.getMessage());
+            tx.setStatus(TransactionStatus.FAILED);
+            transactionRepository.save(tx);
+            throw reserveEx;
+        }
+
         // Initiate Stripe Instant Payout
         Money money = Money.of(request.amount(), request.currency());
         PayoutResult payout = paymentGateway.initiateInstantPayout(request.stripePaymentMethodId(), money);
@@ -184,7 +192,7 @@ public class TransactionServiceImpl implements ITransactionService {
     private void handlePaymentIntentSucceeded(String paymentIntentId) {
         transactionRepository.findByStripePaymentIntentId(paymentIntentId)
                 .ifPresentOrElse(tx -> {
-                    tx.setStatus(TransactionStatus.COMPLETED);
+                    tx.setStatus(TransactionStatus.PENDING_LEDGER);
                     transactionRepository.save(tx);
 
                     publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_IN_COMPLETED", 1,
@@ -216,7 +224,7 @@ public class TransactionServiceImpl implements ITransactionService {
     private void handlePayoutPaid(String payoutId) {
         transactionRepository.findByStripePayoutId(payoutId)
                 .ifPresentOrElse(tx -> {
-                    tx.setStatus(TransactionStatus.COMPLETED);
+                    tx.setStatus(TransactionStatus.PENDING_LEDGER);
                     transactionRepository.save(tx);
 
                     publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_OUT_COMPLETED", 1,
@@ -298,6 +306,21 @@ public class TransactionServiceImpl implements ITransactionService {
             log.info("P2P transfer rejected by fraud, failing: txId={}", tx.getId());
         }
         transactionRepository.save(tx);
+    }
+
+    @Override
+    @Transactional
+    public void markLedgerCommitted(UUID transactionId) {
+        transactionRepository.findById(transactionId).ifPresentOrElse(tx -> {
+            if (tx.getStatus() == TransactionStatus.PENDING_LEDGER) {
+                tx.setStatus(TransactionStatus.COMPLETED);
+                transactionRepository.save(tx);
+                log.info("Ledger confirmed, transaction marked COMPLETED: txId={}", transactionId);
+            } else {
+                log.warn("markLedgerCommitted called but tx is not PENDING_LEDGER: txId={} status={}", transactionId,
+                        tx.getStatus());
+            }
+        }, () -> log.warn("markLedgerCommitted: transaction not found txId={}", transactionId));
     }
 
     private void guardDuplicate(UUID idempotencyKey) {

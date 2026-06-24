@@ -10,6 +10,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
@@ -24,8 +25,8 @@ import java.util.UUID;
 @Tag(name = "User Profile", description = "User profile management")
 public class UserProfileController {
 
-    private final IUserProfileService userProfileService; // For commands
-    private final UserProfileProjectionService queryService; // For queries
+    private final IUserProfileService userProfileService;
+    private final UserProfileProjectionService queryService;
 
     @GetMapping("/me")
     @Operation(summary = "Get the authenticated user's profile")
@@ -49,6 +50,7 @@ public class UserProfileController {
     }
 
     @GetMapping("/{userId}")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Get a user profile by ID (Admin only)")
     public ResponseEntity<ApiResponse<UserProfileResponse>> getUserById(
             @PathVariable UUID userId) {

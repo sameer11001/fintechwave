@@ -14,7 +14,7 @@ import com.fintechwave.security.converter.KeycloakJwtAuthenticationConverter;
 import com.fintechwave.security.exception.KeycloakAuthenticationEntryPoint;
 
 
-@Configuration
+@Configuration(proxyBeanMethods = false)
 @EnableWebSecurity
 @EnableMethodSecurity
 @RequiredArgsConstructor
@@ -32,7 +32,7 @@ public class SecurityConfig {
 
                                 .authorizeHttpRequests(auth -> auth
                                                 .requestMatchers("/api/v1/internal/webhook/**").permitAll()
-                                                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                                                .requestMatchers("/actuator/health", "/actuator/info", "/actuator/prometheus").permitAll()
                                                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/v3/api-docs")
                                                 .permitAll()
                                                 .anyRequest().authenticated())

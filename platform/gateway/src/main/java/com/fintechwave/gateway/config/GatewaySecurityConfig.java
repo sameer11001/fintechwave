@@ -13,7 +13,7 @@ import org.springframework.security.oauth2.server.resource.authentication.Reacti
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import reactor.core.publisher.Mono;
 
-@Configuration
+@Configuration(proxyBeanMethods = false)
 @EnableWebFluxSecurity
 public class GatewaySecurityConfig {
 
@@ -25,7 +25,7 @@ public class GatewaySecurityConfig {
                         // ── Public endpoints ───────────────────────────────────────────
                         .pathMatchers(HttpMethod.OPTIONS).permitAll()
                         .pathMatchers(HttpMethod.GET).permitAll()
-                        .pathMatchers("/actuator/health", "/actuator/info").permitAll()
+                        .pathMatchers("/actuator/health", "/actuator/info", "/actuator/prometheus").permitAll()
                         .pathMatchers("/api/v1/internal/webhook/**").permitAll()
                         .pathMatchers("/api/v1/webhooks/**").permitAll()
                         .pathMatchers("/api/v1/fraud/**").hasRole("ADMIN")

@@ -26,6 +26,7 @@
         <fintechwave.security.version>1.0.0</fintechwave.security.version>
         <fintechwave.events.version>1.0.0</fintechwave.events.version>
         <fintechwave.payment.gateway.version>1.0.0</fintechwave.payment.gateway.version>
+        <logstash-logback-encoder.version>7.4</logstash-logback-encoder.version>
     </properties>
 
     <dependencyManagement>
@@ -138,6 +139,12 @@
                 <groupId>com.fintechwave</groupId>
                 <artifactId>grpc-contracts</artifactId>
                 <version>1.0.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>net.logstash.logback</groupId>
+                <artifactId>logstash-logback-encoder</artifactId>
+                <version>${logstash-logback-encoder.version}</version>
             </dependency>
 
         </dependencies>

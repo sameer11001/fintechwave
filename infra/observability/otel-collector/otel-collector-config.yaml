@@ -32,17 +32,18 @@ processors:
     check_interval: 1s
     limit_mib: 150
     spike_limit_mib: 50
-  filter/logs:
-    error_mode: ignore
-    logs:
-      log_record:
-        - severity_number < 9
+  resource:
+    attributes:
+      - action: upsert
+        key: deployment.environment
+        value: "local-dev"
   transform/logs:
     error_mode: ignore
     log_statements:
       - context: log
         statements:
           - set(resource.attributes["level"], severity_text)
+          - set(resource.attributes["trace_id"], attributes["trace_id"])
 
 exporters:
   prometheus_remote_write:
@@ -72,5 +73,5 @@ service:
       exporters: [prometheus_remote_write]
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, transform/logs, batch]
+      processors: [memory_limiter, resource, transform/logs, batch]
       exporters: [otlp_http/loki]

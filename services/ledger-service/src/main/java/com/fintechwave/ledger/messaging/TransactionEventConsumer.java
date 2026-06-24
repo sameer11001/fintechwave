@@ -23,22 +23,12 @@ import java.util.UUID;
 public class TransactionEventConsumer {
     private final ILedgerService ledgerService;
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     @KafkaListener(topics = "tx.transaction-events", groupId = "ledger-service-tx", containerFactory = "kafkaListenerContainerFactory")
     @Transactional
     public void onTransactionEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
-
-            String eventIdStr = root.path("idempotencyKey").asText();
-            Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:ledger-tx:" + eventIdStr, "1", java.time.Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
-                log.debug("Event {} already processed, skipping", eventIdStr);
-                ack.acknowledge();
-                return;
-            }
 
             String eventType = root.path("eventType").asText();
             UUID transactionId = UUID.fromString(root.path("aggregateId").asText());
@@ -51,7 +41,9 @@ public class TransactionEventConsumer {
                 case "CASH_OUT_INITIATED" -> handleCashOutInitiated(transactionId, payload);
                 case "CASH_OUT_COMPLETED" -> handleCashOutCompleted(transactionId, payload);
                 case "CASH_OUT_FAILED" -> handleCashOutFailed(transactionId, payload);
-                default -> log.error("UNKNOWN OR MISSING eventType='{}' received on tx.transaction-events. txId={} Message ignored but requires investigation!", eventType, transactionId);
+                default -> log.error(
+                        "UNKNOWN OR MISSING eventType='{}' received on tx.transaction-events. txId={} Message ignored but requires investigation!",
+                        eventType, transactionId);
             }
 
             ack.acknowledge();

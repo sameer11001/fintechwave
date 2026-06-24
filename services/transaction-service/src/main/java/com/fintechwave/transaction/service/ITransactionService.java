@@ -65,4 +65,9 @@ public interface ITransactionService {
     TransactionResponse getTransactionById(UUID transactionId, UUID callerId);
 
     void handleFraudDecision(UUID transactionId, boolean approved);
+
+    /**
+     * Marks a PENDING_LEDGER transaction as COMPLETED once the ledger confirms it.
+     */
+    void markLedgerCommitted(UUID transactionId);
 }

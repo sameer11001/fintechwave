@@ -11,10 +11,16 @@ import com.fintechwave.ledger.dto.response.WalletResponse;
 import com.fintechwave.ledger.exception.InsufficientBalanceException;
 import com.fintechwave.ledger.exception.LedgerBalanceViolationException;
 import com.fintechwave.ledger.exception.WalletNotFoundException;
+import com.fintechwave.ledger.domain.entity.OutboxEvent;
 import com.fintechwave.ledger.repository.AccountRepository;
 import com.fintechwave.ledger.repository.BalanceRepository;
 import com.fintechwave.ledger.repository.LedgerEntryRepository;
+import com.fintechwave.ledger.repository.OutboxEventRepository;
 import com.fintechwave.ledger.service.ILedgerService;
+import com.fintechwave.events.GenericDomainEvent;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.tracing.annotation.NewSpan;
+import io.micrometer.tracing.annotation.SpanTag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,6 +40,8 @@ public class LedgerServiceImpl implements ILedgerService {
     private final AccountRepository accountRepository;
     private final BalanceRepository balanceRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
+    private final OutboxEventRepository outboxEventRepository;
+    private final ObjectMapper objectMapper;
 
     @Override
     @Transactional
@@ -73,6 +81,7 @@ public class LedgerServiceImpl implements ILedgerService {
 
     @Override
     @Transactional
+    @NewSpan("ledger.commit-double-entry")
     public void commitDoubleEntry(DoubleEntryRequest request) {
         validateBalance(request);
 
@@ -117,12 +126,39 @@ public class LedgerServiceImpl implements ILedgerService {
             balanceRepository.save(balance);
         }
 
+        try {
+            GenericDomainEvent domainEvent = new GenericDomainEvent(
+                    "LEDGER_COMMITTED",
+                    1,
+                    request.transactionId(),
+                    "LEDGER",
+                    request
+            );
+            String payloadJson = objectMapper.writeValueAsString(domainEvent);
+            outboxEventRepository.save(OutboxEvent.builder()
+                    .aggregateId(domainEvent.getAggregateId())
+                    .aggregateType(domainEvent.getAggregateType())
+                    .eventType(domainEvent.getEventType())
+                    .topic("ledger.transaction-results")
+                    .payload(payloadJson)
+                    .idempotencyKey(UUID.randomUUID())
+                    .published(false)
+                    .build());
+        } catch (Exception e) {
+            log.error("Failed to serialize outbox event for ledger commit: txId={}", request.transactionId(), e);
+            throw new RuntimeException("Outbox serialization failed", e);
+        }
+
         log.info("Double-entry committed: transactionId={}", request.transactionId());
     }
 
     @Override
     @Transactional
-    public void reserve(UUID transactionId, UUID sourceAccountId, BigDecimal amount, String currency) {
+    @NewSpan("ledger.reserve")
+    public void reserve(@SpanTag("transaction.id") UUID transactionId, 
+                        @SpanTag("account.source") UUID sourceAccountId, 
+                        @SpanTag("amount") BigDecimal amount, 
+                        @SpanTag("currency") String currency) {
         Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
         commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
@@ -136,7 +172,11 @@ public class LedgerServiceImpl implements ILedgerService {
 
     @Override
     @Transactional
-    public void commit(UUID transactionId, UUID destinationAccountId, BigDecimal amount, String currency) {
+    @NewSpan("ledger.commit")
+    public void commit(@SpanTag("transaction.id") UUID transactionId, 
+                       @SpanTag("account.destination") UUID destinationAccountId, 
+                       @SpanTag("amount") BigDecimal amount, 
+                       @SpanTag("currency") String currency) {
         Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
         commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
@@ -150,7 +190,11 @@ public class LedgerServiceImpl implements ILedgerService {
 
     @Override
     @Transactional
-    public void release(UUID transactionId, UUID sourceAccountId, BigDecimal amount, String currency) {
+    @NewSpan("ledger.release")
+    public void release(@SpanTag("transaction.id") UUID transactionId, 
+                        @SpanTag("account.source") UUID sourceAccountId, 
+                        @SpanTag("amount") BigDecimal amount, 
+                        @SpanTag("currency") String currency) {
         Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
         commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(

@@ -19,21 +19,11 @@ public class FraudDecisionConsumer {
 
     private final ITransactionService transactionService;
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     @KafkaListener(topics = "fraud.risk-events", groupId = "transaction-service-fraud", containerFactory = "kafkaListenerContainerFactory")
     public void onFraudEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
-
-            String eventIdStr = root.path("idempotencyKey").asText();
-            Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:tx-fraud:" + eventIdStr, "1", java.time.Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
-                log.debug("Event {} already processed, skipping", eventIdStr);
-                ack.acknowledge();
-                return;
-            }
 
             String eventType = root.path("eventType").asText();
             UUID transactionId = UUID.fromString(root.path("aggregateId").asText());

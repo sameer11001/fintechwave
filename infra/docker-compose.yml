@@ -6,8 +6,8 @@ services:
     command: >
       postgres
         -c wal_level=logical
-        -c max_wal_senders=4
-        -c max_replication_slots=4
+        -c max_wal_senders=10
+        -c max_replication_slots=10
     environment:
       POSTGRES_USER:     postgres
       POSTGRES_PASSWORD: ${DB_PASS:-postgres}
@@ -135,6 +135,8 @@ services:
       KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
     ports:
       - "29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
     networks:
       - fintechwave
     healthcheck:
@@ -235,9 +237,9 @@ services:
       retries: 10
       start_period: 60s
 
-  minio:
+  minio-server:
     image: minio/minio:latest
-    container_name: fintechwave-minio
+    container_name: fintechwave-minio-v2
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER:     ${MINIO_ROOT_USER:-minioadmin}
@@ -248,7 +250,9 @@ services:
     volumes:
       - minio-data:/data
     networks:
-      - fintechwave
+      fintechwave:
+        aliases:
+          - minio
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live || exit 1"]
       interval: 15s
@@ -625,7 +629,7 @@ services:
     image: minio/mc
     container_name: fintechwave-minio-setup
     depends_on:
-      minio:
+      minio-server:
         condition: service_healthy
     networks:
       - fintechwave
@@ -650,7 +654,7 @@ services:
     networks:
       - fintechwave
     depends_on:
-      minio:
+      minio-server:
         condition: service_healthy
       minio-setup:
         condition: service_completed_successfully
@@ -681,6 +685,7 @@ services:
       - --enable-feature=remote-write-receiver
     volumes:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml
       - prometheus-data:/prometheus
     ports:
       - "9090:9090"
@@ -688,6 +693,18 @@ services:
       resources:
         limits:
           memory: 512M
+    networks:
+      - fintechwave
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: fintechwave-alertmanager
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+    volumes:
+      - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    ports:
+      - "9093:9093"
     networks:
       - fintechwave
 
@@ -748,6 +765,7 @@ services:
 
 volumes:
   postgres-data:
+  kafka-data:
   keycloak-db-data:
   minio-data:
   mongodb-data:

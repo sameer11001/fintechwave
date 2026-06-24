@@ -12,5 +12,6 @@ curl -sf -X POST "$CONNECT_URL" -H "Content-Type: application/json" -d @/debeziu
 curl -sf -X POST "$CONNECT_URL" -H "Content-Type: application/json" -d @/debezium/outbox-connector-kyc.json
 curl -sf -X POST "$CONNECT_URL" -H "Content-Type: application/json" -d @/debezium/outbox-connector-tx.json
 curl -sf -X POST "$CONNECT_URL" -H "Content-Type: application/json" -d @/debezium/outbox-connector-fraud.json
+curl -sf -X POST "$CONNECT_URL" -H "Content-Type: application/json" -d @/debezium/outbox-connector-ledger.json
 
 echo "Debezium Connectors Registered! ✅"

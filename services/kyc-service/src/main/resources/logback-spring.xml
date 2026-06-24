@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+  <!-- ── JSON Encoder for structured logging ─────────────────────── -->
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+      <!-- OTel agent auto-injects trace_id and span_id into MDC -->
+      <includeMdcKeyName>trace_id</includeMdcKeyName>
+      <includeMdcKeyName>span_id</includeMdcKeyName>
+      <!-- Business context fields set by our code -->
+      <includeMdcKeyName>user_id</includeMdcKeyName>
+      <includeMdcKeyName>transaction_id</includeMdcKeyName>
+      <includeMdcKeyName>account_id</includeMdcKeyName>
+      <includeMdcKeyName>applicant_id</includeMdcKeyName>
+      <includeMdcKeyName>event_type</includeMdcKeyName>
+      <includeMdcKeyName>correlation_id</includeMdcKeyName>
+      <!-- Removes the redundant "message" field duplication -->
+      <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
+    </encoder>
+  </appender>
+
+  <!-- ── AUDIT appender — separate, never sampled ───────────────── -->
+  <appender name="AUDIT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+      <customFields>{"log_type":"audit"}</customFields>
+    </encoder>
+  </appender>
+
+  <!-- ── Audit logger routes to its own appender ─────────────────── -->
+  <logger name="AUDIT_LOG" level="INFO" additivity="false">
+    <appender-ref ref="AUDIT" />
+  </logger>
+
+  <!-- ── Root logger ─────────────────────────────────────────────── -->
+  <root level="INFO">
+    <appender-ref ref="STDOUT" />
+  </root>
+
+  <!-- ── Noisy framework loggers — only WARN in prod ─────────────── -->
+  <logger name="org.springframework" level="WARN" />
+  <logger name="org.hibernate" level="WARN" />
+  <logger name="io.netty" level="WARN" />
+  <logger name="org.apache.kafka" level="WARN" />
+
+</configuration>

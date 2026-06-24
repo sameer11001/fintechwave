@@ -11,6 +11,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -22,25 +23,22 @@ public class KycEventConsumer {
     private final ObjectMapper objectMapper;
     private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
-    @KafkaListener(
-            topics = {"kyc.verification-events"},
-            groupId = "notification-service-kyc",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
+    @KafkaListener(topics = {
+            "kyc.verification-events" }, groupId = "notification-service-kyc", containerFactory = "kafkaListenerContainerFactory")
     public void onKycEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
 
             String eventIdStr = root.path("idempotencyKey").asText();
             Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:notif-kyc:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+                    .setIfAbsent("processed:notif-kyc:" + eventIdStr, "1", Duration.ofDays(7));
             if (Boolean.FALSE.equals(isNew)) {
                 log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();
                 return;
             }
 
-            String eventType       = root.path("eventType").asText();
+            String eventType = root.path("eventType").asText();
             String idempotencyKeyStr = root.path("idempotencyKey").asText();
 
             if (idempotencyKeyStr == null || idempotencyKeyStr.isBlank()) {
@@ -65,24 +63,25 @@ public class KycEventConsumer {
             switch (eventType) {
                 case "KYC_VERIFIED" -> {
                     UUID userId = parseUUID(root.path("payload").path("userId").asText(), eventType);
-                    if (userId == null) break;
+                    if (userId == null)
+                        break;
                     notificationService.send(
                             idempotencyKey, userId, NotificationChannel.EMAIL,
                             "KYC_VERIFIED",
                             "Your KYC verification is approved",
-                            "Congratulations! Your identity has been verified and your wallet is ready."
-                    );
+                            "Congratulations! Your identity has been verified and your wallet is ready.");
                 }
                 case "KYC_REJECTED" -> {
                     UUID userId = parseUUID(root.path("payload").path("userId").asText(), eventType);
-                    if (userId == null) break;
-                    String reason = root.path("payload").path("rejectionReason").asText("Please resubmit your documents.");
+                    if (userId == null)
+                        break;
+                    String reason = root.path("payload").path("rejectionReason")
+                            .asText("Please resubmit your documents.");
                     notificationService.send(
                             idempotencyKey, userId, NotificationChannel.EMAIL,
                             "KYC_REJECTED",
                             "Your KYC verification was not approved",
-                            "Unfortunately your verification was rejected. Reason: " + reason
-                    );
+                            "Unfortunately your verification was rejected. Reason: " + reason);
                 }
                 default -> log.debug("No notification mapping for eventType={}", eventType);
             }

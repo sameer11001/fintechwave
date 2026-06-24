@@ -51,7 +51,7 @@ public class SecurityAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public KeycloakAuthenticationEntryPoint keycloakAuthenticationEntryPoint() {
-        return new KeycloakAuthenticationEntryPoint();
+    public KeycloakAuthenticationEntryPoint keycloakAuthenticationEntryPoint(com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+        return new KeycloakAuthenticationEntryPoint(objectMapper);
     }
 }

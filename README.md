@@ -1,5 +1,7 @@
 ![FintechWave Platform](docs/images/fintechwave-banner.jpg)
 
+![FintechWave System Design](docs/images/fintechwave-system-design.jpg)
+
 # FintechWave: Platform Overview
 
 ## Executive Summary

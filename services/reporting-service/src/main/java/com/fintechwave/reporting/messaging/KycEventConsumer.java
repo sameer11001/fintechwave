@@ -10,6 +10,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -29,7 +30,7 @@ public class KycEventConsumer {
 
             String eventIdStr = root.path("idempotencyKey").asText();
             Boolean isNew = redisTemplate.opsForValue()
-                    .setIfAbsent("processed:report-kyc:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+                    .setIfAbsent("processed:report-kyc:" + eventIdStr, "1", Duration.ofDays(7));
             if (Boolean.FALSE.equals(isNew)) {
                 log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();

@@ -10,6 +10,7 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -22,30 +23,27 @@ public class TransactionEventConsumer {
     private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
     private final com.fintechwave.reporting.service.SearchIndexingService searchIndexingService;
 
-    @KafkaListener(
-            topics = {"tx.transaction-events"},
-            groupId = "reporting-service-tx",
-            containerFactory = "kafkaListenerContainerFactory"
-    )
+    @KafkaListener(topics = {
+            "tx.transaction-events" }, groupId = "reporting-service-tx", containerFactory = "kafkaListenerContainerFactory")
     public void onTransactionEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
 
             String eventIdStr = root.path("idempotencyKey").asText();
             Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:report-tx:" + eventIdStr, "1", java.time.Duration.ofDays(7));
+                    .setIfAbsent("processed:report-tx:" + eventIdStr, "1", Duration.ofDays(7));
             if (Boolean.FALSE.equals(isNew)) {
                 log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();
                 return;
             }
 
-            String eventType       = root.path("eventType").asText();
+            String eventType = root.path("eventType").asText();
             JsonNode payload = root.path("payload");
 
             switch (eventType) {
                 case "TRANSFER_COMPLETED", "TRANSFER_REVERSED" ->
-                        indexTx(payload, "P2P_TRANSFER", "TRANSFER_COMPLETED".equals(eventType) ? "COMPLETED" : "REVERSED");
+                    indexTx(payload, "P2P_TRANSFER", "TRANSFER_COMPLETED".equals(eventType) ? "COMPLETED" : "REVERSED");
 
                 case "TRANSFER_FAILED" -> indexTx(payload, "P2P_TRANSFER", "FAILED");
                 case "CASH_IN_COMPLETED" -> indexTx(payload, "CASH_IN", "COMPLETED");
@@ -69,11 +67,12 @@ public class TransactionEventConsumer {
     private void indexTx(JsonNode payload, String txType, String status) {
         UUID transactionId = UUID.fromString(payload.path("transactionId").asText());
         String userIdStr = payload.has("userId") ? payload.path("userId").asText() : payload.path("senderId").asText();
-        UUID userId      = UUID.fromString(userIdStr);
+        UUID userId = UUID.fromString(userIdStr);
         BigDecimal amount = new BigDecimal(payload.path("amount").asText("0"));
-        String currency  = payload.path("currency").asText("USD");
+        String currency = payload.path("currency").asText("USD");
         UUID counterparty = payload.has("receiverId")
-                ? UUID.fromString(payload.path("receiverId").asText()) : null;
+                ? UUID.fromString(payload.path("receiverId").asText())
+                : null;
 
         searchIndexingService.indexTransaction(
                 transactionId,
@@ -83,7 +82,6 @@ public class TransactionEventConsumer {
                 currency,
                 txType,
                 status,
-                Instant.now()
-        );
+                Instant.now());
     }
 }

@@ -19,22 +19,13 @@ public class KYCVerifiedConsumer {
 
     private final ILedgerService ledgerService;
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
 
     @KafkaListener(topics = "kyc.verification-events", groupId = "ledger-service-kyc", containerFactory = "kafkaListenerContainerFactory")
     @Transactional
-    public void onKYCVerified(ConsumerRecord<String, String> record, org.springframework.kafka.support.Acknowledgment ack) {
+    public void onKYCVerified(ConsumerRecord<String, String> record,
+            org.springframework.kafka.support.Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
-
-            String eventIdStr = root.path("idempotencyKey").asText();
-            Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:ledger-kyc:" + eventIdStr, "1", java.time.Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
-                log.debug("Event {} already processed, skipping", eventIdStr);
-                ack.acknowledge();
-                return;
-            }
 
             String eventType = root.path("eventType").asText();
 
@@ -51,7 +42,9 @@ public class KYCVerifiedConsumer {
                     log.debug("Ignoring known event type={} on kyc.verification-events", eventType);
                 }
                 default -> {
-                    log.error("UNKNOWN OR MISSING event type='{}' received on kyc.verification-events. Message ignored but requires investigation!", eventType);
+                    log.error(
+                            "UNKNOWN OR MISSING event type='{}' received on kyc.verification-events. Message ignored but requires investigation!",
+                            eventType);
                 }
             }
             ack.acknowledge();
