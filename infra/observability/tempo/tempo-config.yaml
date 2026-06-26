@@ -15,3 +15,10 @@ storage:
       path: /tmp/tempo/blocks
     wal:
       path: /tmp/tempo/wal
+
+compactor:
+  compaction:
+    compaction_window: 1h
+    max_block_bytes: 100_000_000
+    block_retention: 168h
+    compacted_block_retention: 10m

@@ -32,7 +32,8 @@ public class SecurityConfig {
 
                                 .authorizeHttpRequests(auth -> auth
                                                 .requestMatchers("/api/v1/internal/webhook/**").permitAll()
-                                                .requestMatchers("/actuator/health", "/actuator/info", "/actuator/prometheus").permitAll()
+                                                .requestMatchers("/actuator/prometheus").hasRole("MONITORING")
+                                                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                                                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**", "/v3/api-docs")
                                                 .permitAll()
                                                 .anyRequest().authenticated())

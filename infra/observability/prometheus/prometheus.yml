@@ -24,6 +24,7 @@ scrape_configs:
     metrics_path: '/actuator/prometheus'
     static_configs:
       - targets:
+          - 'gateway:8080'
           - 'user-service:8081'
           - 'kyc-service:8082'
           - 'ledger-service:8083'

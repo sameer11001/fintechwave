@@ -25,6 +25,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.fintechwave.core.observability.BusinessContextMdc;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -46,110 +47,114 @@ public class LedgerServiceImpl implements ILedgerService {
     @Override
     @Transactional
     public WalletResponse provisionWallet(UUID userId, String currency) {
-        if (accountRepository.existsByOwnerIdAndAccountCode(userId, AccountCode.USER_WALLET.getCode())) {
-            log.warn("Wallet already exists for userId={} — idempotent skip", userId);
-            return getWalletBalance(userId);
+        try (var ctx = BusinessContextMdc.of(userId, null, "WALLET_PROVISIONED")) {
+            if (accountRepository.existsByOwnerIdAndAccountCode(userId, AccountCode.USER_WALLET.getCode())) {
+                log.warn("Wallet already exists for userId={} — idempotent skip", userId);
+                return getWalletBalance(userId);
+            }
+
+            Account account = Account.builder()
+                    .ownerId(userId)
+                    .accountType(AccountType.LIABILITY)
+                    .accountCode(AccountCode.USER_WALLET.getCode())
+                    .currency(currency)
+                    .status("ACTIVE")
+                    .build();
+            account = accountRepository.save(account);
+
+            Balance balance = Balance.builder()
+                    .accountId(account.getId())
+                    .account(account)
+                    .amount(BigDecimal.ZERO)
+                    .currency(currency)
+                    .updatedAt(Instant.now())
+                    .build();
+            balanceRepository.save(balance);
+
+            log.info("Wallet provisioned: accountId={} userId={}", account.getId(), userId);
+
+            return WalletResponse.builder()
+                    .accountId(account.getId())
+                    .ownerId(userId)
+                    .balance(BigDecimal.ZERO)
+                    .currency(currency)
+                    .build();
         }
-
-        Account account = Account.builder()
-                .ownerId(userId)
-                .accountType(AccountType.LIABILITY)
-                .accountCode(AccountCode.USER_WALLET.getCode())
-                .currency(currency)
-                .status("ACTIVE")
-                .build();
-        account = accountRepository.save(account);
-
-        Balance balance = Balance.builder()
-                .accountId(account.getId())
-                .account(account)
-                .amount(BigDecimal.ZERO)
-                .currency(currency)
-                .updatedAt(Instant.now())
-                .build();
-        balanceRepository.save(balance);
-
-        log.info("Wallet provisioned: accountId={} userId={}", account.getId(), userId);
-
-        return WalletResponse.builder()
-                .accountId(account.getId())
-                .ownerId(userId)
-                .balance(BigDecimal.ZERO)
-                .currency(currency)
-                .build();
     }
 
     @Override
     @Transactional
     @NewSpan("ledger.commit-double-entry")
     public void commitDoubleEntry(DoubleEntryRequest request) {
-        validateBalance(request);
+        try (var ctx = BusinessContextMdc.of(null, request.transactionId(), "LEDGER_COMMITTED")) {
+            validateBalance(request);
 
-        for (DoubleEntryRequest.EntryLine line : request.entries()) {
-            // Skip if idempotency key already processed
-            if (ledgerEntryRepository.existsByIdempotencyKey(line.idempotencyKey())) {
-                log.warn("Duplicate entry skipped: idempotencyKey={}", line.idempotencyKey());
-                continue;
+            for (DoubleEntryRequest.EntryLine line : request.entries()) {
+                // Skip if idempotency key already processed
+                if (ledgerEntryRepository.existsByIdempotencyKey(line.idempotencyKey())) {
+                    log.warn("Duplicate entry skipped: idempotencyKey={}", line.idempotencyKey());
+                    continue;
+                }
+
+                Account account = accountRepository.findById(line.accountId())
+                        .orElseThrow(() -> new WalletNotFoundException(line.accountId()));
+
+                // Persist the journal entry
+                LedgerEntry entry = LedgerEntry.builder()
+                        .transactionId(request.transactionId())
+                        .account(account)
+                        .entryType(EntryType.valueOf(line.entryType()))
+                        .amount(line.amount())
+                        .currency(line.currency())
+                        .idempotencyKey(line.idempotencyKey())
+                        .description(line.description())
+                        .build();
+                ledgerEntryRepository.save(entry);
+
+                Balance balance = balanceRepository.findByIdWithLock(account.getId())
+                        .orElseThrow(() -> new WalletNotFoundException(account.getId()));
+
+                BigDecimal newAmount;
+                if (entry.getEntryType() == account.getAccountType().getNormalBalance()) {
+                    newAmount = balance.getAmount().add(line.amount());
+                } else {
+                    newAmount = balance.getAmount().subtract(line.amount());
+                }
+
+                if (newAmount.compareTo(BigDecimal.ZERO) < 0) {
+                    throw new InsufficientBalanceException(account.getId(), balance.getAmount(), line.amount());
+                }
+
+                balance.setAmount(newAmount);
+                balance.setUpdatedAt(Instant.now());
+                balanceRepository.save(balance);
             }
 
-            Account account = accountRepository.findById(line.accountId())
-                    .orElseThrow(() -> new WalletNotFoundException(line.accountId()));
-
-            // Persist the journal entry
-            LedgerEntry entry = LedgerEntry.builder()
-                    .transactionId(request.transactionId())
-                    .account(account)
-                    .entryType(EntryType.valueOf(line.entryType()))
-                    .amount(line.amount())
-                    .currency(line.currency())
-                    .idempotencyKey(line.idempotencyKey())
-                    .description(line.description())
-                    .build();
-            ledgerEntryRepository.save(entry);
-
-            Balance balance = balanceRepository.findByIdWithLock(account.getId())
-                    .orElseThrow(() -> new WalletNotFoundException(account.getId()));
-
-            BigDecimal newAmount;
-            if (entry.getEntryType() == account.getAccountType().getNormalBalance()) {
-                newAmount = balance.getAmount().add(line.amount());
-            } else {
-                newAmount = balance.getAmount().subtract(line.amount());
+            try {
+                GenericDomainEvent domainEvent = new GenericDomainEvent(
+                        "LEDGER_COMMITTED",
+                        1,
+                        request.transactionId(),
+                        "LEDGER",
+                        request
+                );
+                String payloadJson = objectMapper.writeValueAsString(domainEvent);
+                outboxEventRepository.save(OutboxEvent.builder()
+                        .aggregateId(domainEvent.getAggregateId())
+                        .aggregateType(domainEvent.getAggregateType())
+                        .eventType(domainEvent.getEventType())
+                        .topic("ledger.transaction-results")
+                        .payload(payloadJson)
+                        .idempotencyKey(UUID.randomUUID())
+                        .published(false)
+                        .build());
+            } catch (Exception e) {
+                log.error("Failed to serialize outbox event for ledger commit: txId={}", request.transactionId(), e);
+                throw new RuntimeException("Outbox serialization failed", e);
             }
 
-            if (newAmount.compareTo(BigDecimal.ZERO) < 0) {
-                throw new InsufficientBalanceException(account.getId(), balance.getAmount(), line.amount());
-            }
-
-            balance.setAmount(newAmount);
-            balance.setUpdatedAt(Instant.now());
-            balanceRepository.save(balance);
+            log.info("Double-entry committed: transactionId={}", request.transactionId());
         }
-
-        try {
-            GenericDomainEvent domainEvent = new GenericDomainEvent(
-                    "LEDGER_COMMITTED",
-                    1,
-                    request.transactionId(),
-                    "LEDGER",
-                    request
-            );
-            String payloadJson = objectMapper.writeValueAsString(domainEvent);
-            outboxEventRepository.save(OutboxEvent.builder()
-                    .aggregateId(domainEvent.getAggregateId())
-                    .aggregateType(domainEvent.getAggregateType())
-                    .eventType(domainEvent.getEventType())
-                    .topic("ledger.transaction-results")
-                    .payload(payloadJson)
-                    .idempotencyKey(UUID.randomUUID())
-                    .published(false)
-                    .build());
-        } catch (Exception e) {
-            log.error("Failed to serialize outbox event for ledger commit: txId={}", request.transactionId(), e);
-            throw new RuntimeException("Outbox serialization failed", e);
-        }
-
-        log.info("Double-entry committed: transactionId={}", request.transactionId());
     }
 
     @Override
@@ -159,15 +164,17 @@ public class LedgerServiceImpl implements ILedgerService {
                         @SpanTag("account.source") UUID sourceAccountId, 
                         @SpanTag("amount") BigDecimal amount, 
                         @SpanTag("currency") String currency) {
-        Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
+        try (var ctx = BusinessContextMdc.of(null, transactionId, "LEDGER_RESERVE")) {
+            Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
-        commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
-                new DoubleEntryRequest.EntryLine(sourceAccountId, "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-reserve-debit").getBytes()),
-                        "RESERVE: lock funds"),
-                new DoubleEntryRequest.EntryLine(suspense.getId(), "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-reserve-credit").getBytes()),
-                        "RESERVE: credit suspense"))));
+            commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
+                    new DoubleEntryRequest.EntryLine(sourceAccountId, "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-reserve-debit").getBytes()),
+                            "RESERVE: lock funds"),
+                    new DoubleEntryRequest.EntryLine(suspense.getId(), "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-reserve-credit").getBytes()),
+                            "RESERVE: credit suspense"))));
 
-        log.info("RESERVE: transactionId={} amount={} currency={}", transactionId, amount, currency);
+            log.info("RESERVE: transactionId={} amount={} currency={}", transactionId, amount, currency);
+        }
     }
 
     @Override
@@ -177,15 +184,17 @@ public class LedgerServiceImpl implements ILedgerService {
                        @SpanTag("account.destination") UUID destinationAccountId, 
                        @SpanTag("amount") BigDecimal amount, 
                        @SpanTag("currency") String currency) {
-        Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
+        try (var ctx = BusinessContextMdc.of(null, transactionId, "LEDGER_COMMIT")) {
+            Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
-        commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
-                new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-commit-debit").getBytes()),
-                        "COMMIT: debit suspense"),
-                new DoubleEntryRequest.EntryLine(destinationAccountId, "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-commit-credit").getBytes()),
-                        "COMMIT: credit destination"))));
+            commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
+                    new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-commit-debit").getBytes()),
+                            "COMMIT: debit suspense"),
+                    new DoubleEntryRequest.EntryLine(destinationAccountId, "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-commit-credit").getBytes()),
+                            "COMMIT: credit destination"))));
 
-        log.info("COMMIT: transactionId={} amount={} currency={}", transactionId, amount, currency);
+            log.info("COMMIT: transactionId={} amount={} currency={}", transactionId, amount, currency);
+        }
     }
 
     @Override
@@ -195,15 +204,17 @@ public class LedgerServiceImpl implements ILedgerService {
                         @SpanTag("account.source") UUID sourceAccountId, 
                         @SpanTag("amount") BigDecimal amount, 
                         @SpanTag("currency") String currency) {
-        Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
+        try (var ctx = BusinessContextMdc.of(null, transactionId, "LEDGER_RELEASE")) {
+            Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
-        commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
-                new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-release-debit").getBytes()),
-                        "RELEASE: return from suspense"),
-                new DoubleEntryRequest.EntryLine(sourceAccountId, "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-release-credit").getBytes()),
-                        "RELEASE: credit back to source"))));
+            commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
+                    new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-release-debit").getBytes()),
+                            "RELEASE: return from suspense"),
+                    new DoubleEntryRequest.EntryLine(sourceAccountId, "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-release-credit").getBytes()),
+                            "RELEASE: credit back to source"))));
 
-        log.info("RELEASE: transactionId={} amount={} currency={}", transactionId, amount, currency);
+            log.info("RELEASE: transactionId={} amount={} currency={}", transactionId, amount, currency);
+        }
     }
 
     @Override
@@ -227,20 +238,22 @@ public class LedgerServiceImpl implements ILedgerService {
     @Override
     @Transactional
     public void reconcile() {
-        BigDecimal totalLiabilities = balanceRepository.sumAllLiabilityBalances();
-        BigDecimal platformFloat = balanceRepository.platformFloatBalance();
+        try (var ctx = BusinessContextMdc.of(null, null, "LEDGER_RECONCILE")) {
+            BigDecimal totalLiabilities = balanceRepository.sumAllLiabilityBalances();
+            BigDecimal platformFloat = balanceRepository.platformFloatBalance();
 
-        log.info("Reconciliation: totalLiabilities={} platformFloat={}", totalLiabilities, platformFloat);
+            log.info("Reconciliation: totalLiabilities={} platformFloat={}", totalLiabilities, platformFloat);
 
-        if (totalLiabilities.compareTo(platformFloat) != 0) {
-            BigDecimal divergence = totalLiabilities.subtract(platformFloat);
-            log.error("RECONCILIATION FAILURE: divergence={} — SEV-1 alert required", divergence);
-            throw new LedgerBalanceViolationException(
-                    "Reconciliation mismatch: liabilities=" + totalLiabilities +
-                            " float=" + platformFloat + " divergence=" + divergence);
+            if (totalLiabilities.compareTo(platformFloat) != 0) {
+                BigDecimal divergence = totalLiabilities.subtract(platformFloat);
+                log.error("RECONCILIATION FAILURE: divergence={} — SEV-1 alert required", divergence);
+                throw new LedgerBalanceViolationException(
+                        "Reconciliation mismatch: liabilities=" + totalLiabilities +
+                                " float=" + platformFloat + " divergence=" + divergence);
+            }
+
+            log.info("Reconciliation PASSED: balance={}", totalLiabilities);
         }
-
-        log.info("Reconciliation PASSED: balance={}", totalLiabilities);
     }
 
     @Override

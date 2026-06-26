@@ -24,11 +24,17 @@ import org.springframework.stereotype.Component;
 import java.util.HashMap;
 import java.util.Map;
 
+import java.util.concurrent.Semaphore;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Recover;
+import org.springframework.retry.annotation.Retryable;
+
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class StripeGatewayAdapter implements PaymentGatewayPort {
 
+    private static final Semaphore STRIPE_SEMAPHORE = new Semaphore(50, true);
     private final StripeProperties stripeProperties;
 
     @PostConstruct
@@ -46,7 +52,18 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
      * @return CardPaymentIntent with client secret for frontend confirmation
      */
     @Override
+    @Retryable(
+        retryFor = { PaymentGatewayException.class },
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 500)
+    )
     public CardPaymentIntent createCardPaymentIntent(Money amount, String stripePaymentMethodId) {
+        try {
+            STRIPE_SEMAPHORE.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new PaymentGatewayException("Interrupted while waiting for Stripe rate limit permit", e);
+        }
         try {
             PaymentIntentCreateParams params = PaymentIntentCreateParams.builder()
                     .setAmount(amount.toMinorUnits()) // Stripe uses minor units (cents)
@@ -66,7 +83,18 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
         } catch (StripeException e) {
             log.error("Stripe PaymentIntent creation failed: code={}", e.getCode());
             throw new PaymentGatewayException("Failed to create payment intent: " + e.getMessage(), e);
+        } finally {
+            STRIPE_SEMAPHORE.release();
         }
+    }
+
+    /**
+     * Fallback method executed if all Stripe PaymentIntent retries fail.
+     */
+    @Recover
+    public CardPaymentIntent fallbackCreateCardPaymentIntent(PaymentGatewayException e, Money amount, String stripePaymentMethodId) {
+        log.error("Stripe API completely unavailable for amount {}. Fallback triggered.", amount, e);
+        throw new PaymentGatewayException("Payment processor is currently down. Please try again later.", e);
     }
 
     /**
@@ -81,6 +109,12 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
      */
     @Override
     public PayoutResult initiateInstantPayout(String stripePaymentMethodId, Money amount) {
+        try {
+            STRIPE_SEMAPHORE.acquire();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new PaymentGatewayException("Interrupted while waiting for Stripe rate limit permit", e);
+        }
         try {
             Map<String, Object> destination = new HashMap<>();
             destination.put("type", "card");
@@ -101,6 +135,8 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
         } catch (StripeException e) {
             log.error("Stripe Instant Payout failed: code={}", e.getCode());
             throw new PaymentGatewayException("Failed to initiate payout: " + e.getMessage(), e);
+        } finally {
+            STRIPE_SEMAPHORE.release();
         }
     }
 

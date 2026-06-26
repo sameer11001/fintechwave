@@ -13,6 +13,10 @@ import lombok.extern.slf4j.Slf4j;
 import net.devh.boot.grpc.client.inject.GrpcClient;
 import org.springframework.stereotype.Service;
 
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Recover;
+import org.springframework.retry.annotation.Retryable;
+
 import java.math.BigDecimal;
 import java.util.UUID;
 
@@ -23,6 +27,11 @@ public class LedgerGrpcClient {
     @GrpcClient("ledger-service")
     private LedgerServiceGrpc.LedgerServiceBlockingStub ledgerServiceStub;
 
+    @Retryable(
+        retryFor = { ServiceUnavailableException.class, StatusRuntimeException.class },
+        maxAttempts = 3,
+        backoff = @Backoff(delay = 1000, multiplier = 2)
+    )
     public void reserveFundsSync(UUID transactionId, UUID userId, BigDecimal amount, String currency) {
         log.info("Calling LedgerService gRPC to reserve funds: txId={} amount={}", transactionId, amount);
 
@@ -113,5 +122,11 @@ public class LedgerGrpcClient {
             log.error("Unexpected error calling LedgerService gRPC for txId={}", transactionId, e);
             throw new PaymentGatewayException("Failed to connect to ledger service: " + e.getMessage(), e);
         }
+    }
+
+    @Recover
+    public void fallbackReserveFundsSync(Exception e, UUID transactionId, UUID userId, BigDecimal amount, String currency) {
+        log.error("ALL RETRIES FAILED for Ledger gRPC call. txId={}. Executing fallback.", transactionId, e);
+        throw new PaymentGatewayException("Ledger service unavailable after retries. Transaction queued for review.", e);
     }
 }

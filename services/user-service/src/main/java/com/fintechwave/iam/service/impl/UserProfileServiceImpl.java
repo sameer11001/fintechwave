@@ -93,6 +93,15 @@ public class UserProfileServiceImpl implements IUserProfileService {
             profile.setPhoneHash(HashUtil.sha256(request.phone().trim()));
 
         UserProfile updated = userProfileRepository.save(profile);
+
+        // Sync with Keycloak synchronously
+        keycloakAdminClient.updateUserProfile(
+                keycloakId.toString(),
+                request.firstName(),
+                request.lastName(),
+                request.phone()
+        );
+
         return toResponse(updated);
     }
 

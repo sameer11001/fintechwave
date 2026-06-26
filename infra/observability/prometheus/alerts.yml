@@ -13,6 +13,7 @@ groups:
           severity: critical
         annotations:
           description: "{{ $labels.service }} error rate is {{ $value | humanizePercentage }} over 5m"
+          runbook_url: "https://your-wiki/runbooks/high-error-rate"
 
       # ── RED Method: Latency (P99) ───────────────────────────
       - alert: HighP99Latency
@@ -25,6 +26,7 @@ groups:
           severity: warning
         annotations:
           description: "{{ $labels.service }} P99 latency is {{ $value }}s"
+          runbook_url: "https://your-wiki/runbooks/high-p99-latency"
 
       # ── Kafka Consumer Lag ──────────────────────────────────
       - alert: KafkaConsumerLagHigh
@@ -34,6 +36,7 @@ groups:
           severity: warning
         annotations:
           description: "Kafka group {{ $labels.group }} lag is {{ $value }}"
+          runbook_url: "https://your-wiki/runbooks/kafka-consumer-lag"
 
       # ── JVM Heap ────────────────────────────────────────────
       - alert: JvmHeapUsageCritical
@@ -47,6 +50,7 @@ groups:
           severity: critical
         annotations:
           description: "{{ $labels.service }} JVM heap is {{ $value | humanizePercentage }}"
+          runbook_url: "https://your-wiki/runbooks/jvm-heap-critical"
 
       # ── Transaction Stuck State ─────────────────────────────
       - alert: StuckTransactions
@@ -57,3 +61,79 @@ groups:
           severity: critical
         annotations:
           description: "{{ $value }} transactions stuck in PENDING state > 10m on {{ $labels.service }}"
+          runbook_url: "https://your-wiki/runbooks/stuck-transactions"
+
+  - name: fintechwave_business_alerts
+    rules:
+      # ── Transaction Failure Rate ──────────────────────────────────────
+      - alert: HighTransactionFailureRate
+        expr: |
+          increase(fintechwave_transaction_failed_total[5m])
+          /
+          increase(fintechwave_transaction_initiated_total[5m])
+          > 0.10
+        for: 3m
+        labels:
+          severity: critical
+          team: payments
+        annotations:
+          summary: "Transaction failure rate > 10%"
+          description: "{{ $value | humanizePercentage }} of transactions are failing in the last 5m"
+          runbook_url: "https://your-wiki/runbooks/transaction-failure-rate"
+
+      # ── Stripe Webhook Processing Stalled ───────────────────────────
+      - alert: StripeWebhookNotReceived
+        expr: |
+          increase(fintechwave_stripe_webhook_received_total[30m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+          team: payments
+        annotations:
+          summary: "No Stripe webhooks received in 30 minutes"
+          description: "Expected periodic webhooks from Stripe. Check Stripe dashboard and webhook endpoint health."
+          runbook_url: "https://your-wiki/runbooks/stripe-webhook-not-received"
+
+      # ── P2P Transfer Latency Spike ───────────────────────────────────
+      - alert: P2PTransferHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(fintechwave_p2p_transfer_duration_seconds_bucket[5m])) by (le, service)
+          ) > 5.0
+        for: 2m
+        labels:
+          severity: warning
+          team: payments
+        annotations:
+          summary: "P2P transfer P95 latency > 5s"
+          description: "P2P transfers are slow (P95={{ $value }}s). Check ledger-service gRPC and DB."
+          runbook_url: "https://your-wiki/runbooks/p2p-latency-spike"
+
+      # ── Outbox Relay Stalled ─────────────────────────────────────────
+      - alert: OutboxRelayStalled
+        expr: |
+          sum(fintechwave_transaction_stuck_total) by (service) > 0
+        for: 10m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Outbox messages stuck in {{ $labels.service }}"
+          description: "{{ $value }} outbox events have not been relayed in > 10m. Check Kafka connectivity."
+          runbook_url: "https://your-wiki/runbooks/outbox-relay-stalled"
+
+      # # ── Stripe Webhook Processing Failures ──────────────────────────
+      # - alert: StripeWebhookProcessingFailed
+      #   expr: |
+      #     increase(fintechwave_stripe_webhook_received_total{outcome="failed"}[5m]) > 0
+      #   for: 1m
+      #   labels:
+      #     severity: critical
+      #     team: payments
+      #   annotations:
+      #     summary: "Stripe webhooks are failing to process"
+      #     description: "{{ $value }} Stripe webhooks failed to process in the last 5 minutes. Check application logs for parsing or routing errors."
+      #     runbook_url: "https://your-wiki/runbooks/stripe-webhook-failures"
+
+
+#TODO: we need to add the right webhooks

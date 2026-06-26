@@ -25,7 +25,8 @@ public class GatewaySecurityConfig {
                         // ── Public endpoints ───────────────────────────────────────────
                         .pathMatchers(HttpMethod.OPTIONS).permitAll()
                         .pathMatchers(HttpMethod.GET).permitAll()
-                        .pathMatchers("/actuator/health", "/actuator/info", "/actuator/prometheus").permitAll()
+                        .pathMatchers("/actuator/prometheus").hasRole("MONITORING")
+                        .pathMatchers("/actuator/health", "/actuator/info").permitAll()
                         .pathMatchers("/api/v1/internal/webhook/**").permitAll()
                         .pathMatchers("/api/v1/webhooks/**").permitAll()
                         .pathMatchers("/api/v1/fraud/**").hasRole("ADMIN")

@@ -78,6 +78,7 @@
                                 <jvmFlag>-XX:+UseContainerSupport</jvmFlag>
                                 <jvmFlag>-XX:MaxRAMPercentage=75.0</jvmFlag>
                                 <jvmFlag>-Djava.security.egd=file:/dev/./urandom</jvmFlag>
+                                <jvmFlag>-Djdk.tracePinnedThreads=full</jvmFlag>
                             </jvmFlags>
                         </container>
                     </configuration>

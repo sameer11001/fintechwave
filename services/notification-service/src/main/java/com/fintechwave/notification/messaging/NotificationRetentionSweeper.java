@@ -7,6 +7,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+
 /**
  * Scheduled retention sweeper — purges notification records older than retention-days.
  * Runs daily at 02:00 UTC.
@@ -22,6 +24,11 @@ public class NotificationRetentionSweeper {
     private int retentionDays;
 
     @Scheduled(cron = "0 0 2 * * *")
+    @SchedulerLock(
+        name = "notification_retention_sweep",
+        lockAtLeastFor = "PT5M",
+        lockAtMostFor = "PT10M"
+    )
     public void sweep() {
         log.info("Notification retention sweep started: purging records older than {} days", retentionDays);
         int deleted = notificationService.purgeOldNotifications(retentionDays);

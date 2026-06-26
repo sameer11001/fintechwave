@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import com.fintechwave.events.GenericDomainEvent;
+import com.fintechwave.core.observability.BusinessContextMdc;
 
 @Service
 @RequiredArgsConstructor
@@ -44,26 +45,28 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
     @Override
     @Transactional
     public void createKycShell(UUID userId) {
-        if (applicationRepository.existsByUserId(userId)) {
-            log.info("KYC shell already exists for userId={} — idempotent skip", userId);
-            return;
+        try (var ctx = BusinessContextMdc.of(userId, null, "KYC_CREATED")) {
+            if (applicationRepository.existsByUserId(userId)) {
+                log.info("KYC shell already exists for userId={} — idempotent skip", userId);
+                return;
+            }
+
+            KycApplication application = KycApplication.builder()
+                    .userId(userId)
+                    .status(KycStatus.PENDING_SUBMISSION)
+                    .currentTier(KycTier.TIER_0)
+                    .requestedTier(KycTier.TIER_1)
+                    .build();
+            applicationRepository.save(application);
+
+            publishOutboxEvent(application.getId(), "KYC_APPLICATION", "KYC_CREATED", 1,
+                    Map.of("userId", userId.toString(),
+                            "status", KycStatus.PENDING_SUBMISSION.name(),
+                            "currentTier", KycTier.TIER_0.name(),
+                            "requestedTier", KycTier.TIER_1.name()));
+
+            log.info("KYC shell created: applicationId={}", application.getId());
         }
-
-        KycApplication application = KycApplication.builder()
-                .userId(userId)
-                .status(KycStatus.PENDING_SUBMISSION)
-                .currentTier(KycTier.TIER_0)
-                .requestedTier(KycTier.TIER_1)
-                .build();
-        applicationRepository.save(application);
-
-        publishOutboxEvent(application.getId(), "KYC_APPLICATION", "KYC_CREATED", 1,
-                Map.of("userId", userId.toString(),
-                        "status", KycStatus.PENDING_SUBMISSION.name(),
-                        "currentTier", KycTier.TIER_0.name(),
-                        "requestedTier", KycTier.TIER_1.name()));
-
-        log.info("KYC shell created: applicationId={}", application.getId());
     }
 
     @Override
@@ -76,60 +79,62 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
     @Transactional
     public KycApplicationResponse submitApplication(UUID userId, SubmitKycRequest request) {
         KycApplication app = findByUserId(userId);
+        try (var ctx = BusinessContextMdc.of(userId, app.getId(), "KYC_SUBMITTED")) {
+            if (app.getStatus() != KycStatus.PENDING_SUBMISSION && app.getStatus() != KycStatus.REJECTED) {
+                throw new InvalidKycStateTransitionException(
+                        "Application is already in status=" + app.getStatus() + " and cannot be resubmitted");
+            }
 
-        if (app.getStatus() != KycStatus.PENDING_SUBMISSION && app.getStatus() != KycStatus.REJECTED) {
-            throw new InvalidKycStateTransitionException(
-                    "Application is already in status=" + app.getStatus() + " and cannot be resubmitted");
+            app.setStatus(KycStatus.UNDER_REVIEW);
+            app.setRequestedTier(request.requestedTier());
+            app.setRejectionReason(null);
+            applicationRepository.save(app);
+
+            publishOutboxEvent(app.getId(), "KYC_APPLICATION", "KYC_SUBMITTED", 1,
+                    Map.of("userId", userId.toString(),
+                            "requestedTier", request.requestedTier().name()));
+
+            log.info("KYC application submitted: applicationId={} requestedTier={}", app.getId(), request.requestedTier());
+            return KycApplicationResponse.from(app);
         }
-
-        app.setStatus(KycStatus.UNDER_REVIEW);
-        app.setRequestedTier(request.requestedTier());
-        app.setRejectionReason(null);
-        applicationRepository.save(app);
-
-        publishOutboxEvent(app.getId(), "KYC_APPLICATION", "KYC_SUBMITTED", 1,
-                Map.of("userId", userId.toString(),
-                        "requestedTier", request.requestedTier().name()));
-
-        log.info("KYC application submitted: applicationId={} requestedTier={}", app.getId(), request.requestedTier());
-        return KycApplicationResponse.from(app);
     }
 
     @Override
     @Transactional
     public KycDocumentResponse uploadDocument(UUID userId, DocumentType documentType, MultipartFile file) {
         KycApplication app = findByUserId(userId);
+        try (var ctx = BusinessContextMdc.of(userId, app.getId(), "KYC_DOCUMENT_UPLOADED")) {
+            if (app.getStatus() == KycStatus.VERIFIED) {
+                throw new InvalidKycStateTransitionException("Documents cannot be added to a verified application");
+            }
 
-        if (app.getStatus() == KycStatus.VERIFIED) {
-            throw new InvalidKycStateTransitionException("Documents cannot be added to a verified application");
+            if (file.isEmpty()) {
+                throw new InvalidKycStateTransitionException("Uploaded file is empty");
+            }
+
+            String contentType = file.getContentType();
+            if (contentType == null || contentType.isBlank()) {
+                contentType = "application/octet-stream";
+                log.warn("Content-Type not provided for document upload: applicationId={} documentType={} — defaulting to application/octet-stream",
+                        app.getId(), documentType);
+            }
+
+            IDocumentStorageService.StorageReference ref = storageService.upload(app.getId(), userId, documentType.name(),
+                    file);
+
+            KycDocument document = KycDocument.builder()
+                    .application(app)
+                    .documentType(documentType)
+                    .storageBucket(ref.bucket())
+                    .storageKey(ref.objectKey())
+                    .contentType(contentType)
+                    .fileSizeBytes(file.getSize())
+                    .build();
+            documentRepository.save(document);
+
+            log.info("Document saved: applicationId={} documentType={}", app.getId(), documentType);
+            return KycDocumentResponse.from(document);
         }
-
-        if (file.isEmpty()) {
-            throw new InvalidKycStateTransitionException("Uploaded file is empty");
-        }
-
-        String contentType = file.getContentType();
-        if (contentType == null || contentType.isBlank()) {
-            contentType = "application/octet-stream";
-            log.warn("Content-Type not provided for document upload: applicationId={} documentType={} — defaulting to application/octet-stream",
-                    app.getId(), documentType);
-        }
-
-        IDocumentStorageService.StorageReference ref = storageService.upload(app.getId(), userId, documentType.name(),
-                file);
-
-        KycDocument document = KycDocument.builder()
-                .application(app)
-                .documentType(documentType)
-                .storageBucket(ref.bucket())
-                .storageKey(ref.objectKey())
-                .contentType(contentType)
-                .fileSizeBytes(file.getSize())
-                .build();
-        documentRepository.save(document);
-
-        log.info("Document saved: applicationId={} documentType={}", app.getId(), documentType);
-        return KycDocumentResponse.from(document);
     }
 
     @Override
@@ -181,38 +186,42 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
                     "Application must be UNDER_REVIEW to be reviewed. Current status=" + app.getStatus());
         }
 
-        app.setReviewedBy(reviewerId);
-        app.setReviewedAt(Instant.now());
+        String eventType = "APPROVED".equalsIgnoreCase(request.decision()) ? "KYC_VERIFIED" : "KYC_REJECTED";
 
-        if ("APPROVED".equalsIgnoreCase(request.decision())) {
-            app.setStatus(KycStatus.VERIFIED);
-            app.setCurrentTier(app.getRequestedTier());
+        try (var ctx = BusinessContextMdc.of(app.getUserId(), app.getId(), eventType)) {
+            app.setReviewedBy(reviewerId);
+            app.setReviewedAt(Instant.now());
 
-            publishOutboxEvent(app.getId(), "KYC_APPLICATION", "KYC_VERIFIED", 1,
-                    Map.of("userId", app.getUserId().toString(),
-                            "verifiedTier", app.getCurrentTier().name()));
+            if ("APPROVED".equalsIgnoreCase(request.decision())) {
+                app.setStatus(KycStatus.VERIFIED);
+                app.setCurrentTier(app.getRequestedTier());
 
-            log.info("KYC APPROVED: applicationId={} tier={}", applicationId, app.getCurrentTier());
+                publishOutboxEvent(app.getId(), "KYC_APPLICATION", "KYC_VERIFIED", 1,
+                        Map.of("userId", app.getUserId().toString(),
+                                "verifiedTier", app.getCurrentTier().name()));
 
-        } else if ("REJECTED".equalsIgnoreCase(request.decision())) {
-            if (request.rejectionReason() == null || request.rejectionReason().isBlank()) {
-                throw new InvalidKycStateTransitionException("Rejection reason is required when rejecting");
+                log.info("KYC APPROVED: applicationId={} tier={}", applicationId, app.getCurrentTier());
+
+            } else if ("REJECTED".equalsIgnoreCase(request.decision())) {
+                if (request.rejectionReason() == null || request.rejectionReason().isBlank()) {
+                    throw new InvalidKycStateTransitionException("Rejection reason is required when rejecting");
+                }
+                app.setStatus(KycStatus.REJECTED);
+                app.setRejectionReason(request.rejectionReason());
+
+                publishOutboxEvent(app.getId(), "KYC_APPLICATION", "KYC_REJECTED", 1,
+                        Map.of("userId", app.getUserId().toString(),
+                                "rejectionReason", request.rejectionReason()));
+
+                log.info("KYC REJECTED: applicationId={}", applicationId);
+            } else {
+                throw new InvalidKycStateTransitionException("Invalid decision: " + request.decision()
+                        + ". Must be APPROVED or REJECTED");
             }
-            app.setStatus(KycStatus.REJECTED);
-            app.setRejectionReason(request.rejectionReason());
 
-            publishOutboxEvent(app.getId(), "KYC_APPLICATION", "KYC_REJECTED", 1,
-                    Map.of("userId", app.getUserId().toString(),
-                            "rejectionReason", request.rejectionReason()));
-
-            log.info("KYC REJECTED: applicationId={}", applicationId);
-        } else {
-            throw new InvalidKycStateTransitionException("Invalid decision: " + request.decision()
-                    + ". Must be APPROVED or REJECTED");
+            applicationRepository.save(app);
+            return KycApplicationResponse.from(app);
         }
-
-        applicationRepository.save(app);
-        return KycApplicationResponse.from(app);
     }
 
     private KycApplication findByUserId(UUID userId) {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonParseException;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -47,6 +48,11 @@ public class KafkaConsumerConfig {
         factory.setConsumerFactory(cf);
         factory.setCommonErrorHandler(errorHandler);
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+
+        SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor("kafka-vt-");
+        executor.setVirtualThreads(true);
+        factory.getContainerProperties().setListenerTaskExecutor(executor);
+
         return factory;
     }
 }

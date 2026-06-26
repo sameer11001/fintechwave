@@ -139,6 +139,16 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
+
+        <!-- ShedLock Distributed Scheduler Lock -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-redis-spring</artifactId>
+        </dependency>
 </dependencies>
 
     <build>

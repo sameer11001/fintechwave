@@ -27,10 +27,20 @@
         <fintechwave.events.version>1.0.0</fintechwave.events.version>
         <fintechwave.payment.gateway.version>1.0.0</fintechwave.payment.gateway.version>
         <logstash-logback-encoder.version>7.4</logstash-logback-encoder.version>
+        <kafka-clients.version>4.3.1</kafka-clients.version>
+        <grpc-spring-boot-starter.version>3.1.0.RELEASE</grpc-spring-boot-starter.version>
+        <fintechwave.grpc-contracts.version>1.0.0</fintechwave.grpc-contracts.version>
+        <shedlock.version>5.16.0</shedlock.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+
+            <dependency>
+                <groupId>org.apache.kafka</groupId>
+                <artifactId>kafka-clients</artifactId>
+                <version>${kafka-clients.version}</version>
+            </dependency>
 
             <dependency>
                 <groupId>org.springframework.boot</groupId>
@@ -128,23 +138,34 @@
             <dependency>
                 <groupId>net.devh</groupId>
                 <artifactId>grpc-server-spring-boot-starter</artifactId>
-                <version>3.1.0.RELEASE</version>
+                <version>${grpc-spring-boot-starter.version}</version>
             </dependency>
             <dependency>
                 <groupId>net.devh</groupId>
                 <artifactId>grpc-client-spring-boot-starter</artifactId>
-                <version>3.1.0.RELEASE</version>
+                <version>${grpc-spring-boot-starter.version}</version>
             </dependency>
             <dependency>
                 <groupId>com.fintechwave</groupId>
                 <artifactId>grpc-contracts</artifactId>
-                <version>1.0.0</version>
+                <version>${fintechwave.grpc-contracts.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>net.logstash.logback</groupId>
                 <artifactId>logstash-logback-encoder</artifactId>
                 <version>${logstash-logback-encoder.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>net.javacrumbs.shedlock</groupId>
+                <artifactId>shedlock-spring</artifactId>
+                <version>${shedlock.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.javacrumbs.shedlock</groupId>
+                <artifactId>shedlock-provider-redis-spring</artifactId>
+                <version>${shedlock.version}</version>
             </dependency>
 
         </dependencies>

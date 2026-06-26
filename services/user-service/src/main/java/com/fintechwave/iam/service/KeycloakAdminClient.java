@@ -9,6 +9,8 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
 
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -38,6 +40,39 @@ public class KeycloakAdminClient {
             log.warn("Failed to fetch email from Keycloak Admin API for userId={}: {}", userId, e.getMessage());
         }
         return null;
+    }
+
+    public void updateUserProfile(String userId, String firstName, String lastName, String phone) {
+        try {
+            String token = getServiceAccountToken();
+            if (token == null) {
+                log.error("Cannot update user {} in Keycloak: no service account token", userId);
+                return;
+            }
+
+            Map<String, Object> updates = new HashMap<>();
+            if (firstName != null) updates.put("firstName", firstName);
+            if (lastName != null) updates.put("lastName", lastName);
+
+            if (phone != null) {
+                Map<String, List<String>> attributes = new HashMap<>();
+                attributes.put("phone", List.of(phone));
+                updates.put("attributes", attributes);
+            }
+
+            restClient.put()
+                    .uri(keycloakProperties.getAdmin().userUrl(userId))
+                    .header("Authorization", "Bearer " + token)
+                    .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                    .body(updates)
+                    .retrieve()
+                    .toBodilessEntity();
+            
+            log.info("Successfully updated user profile in Keycloak for userId={}", userId);
+        } catch (Exception e) {
+            log.error("Failed to update user profile in Keycloak for userId={}: {}", userId, e.getMessage());
+            throw new RuntimeException("Failed to update user profile in Keycloak", e);
+        }
     }
 
     @SuppressWarnings("unchecked")

@@ -24,6 +24,8 @@ import com.fintechwave.transaction.service.IFeeService;
 import com.fintechwave.transaction.service.ITransactionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import org.slf4j.MDC;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -32,7 +34,14 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.Map;
 import java.util.UUID;
+
+import com.fintechwave.core.observability.BusinessContextMdc;
 import com.fintechwave.events.GenericDomainEvent;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import io.opentelemetry.api.trace.Span;
+import jakarta.annotation.PostConstruct;
 
 @Service
 @RequiredArgsConstructor
@@ -46,132 +55,232 @@ public class TransactionServiceImpl implements ITransactionService {
     private final IFeeService feeService;
     private final ObjectMapper objectMapper;
     private final LedgerGrpcClient ledgerGrpcClient;
+    private final MeterRegistry meterRegistry;
+
+    private Counter txInitiatedCounter;
+    private Counter txFailedCounter;
+    private Counter stripeWebhookCounter;
+    private Timer p2pTransferTimer;
+
+    @PostConstruct
+    void initMetrics() {
+        this.txInitiatedCounter = Counter.builder("fintechwave.transaction.initiated")
+                .description("Transactions successfully initiated, by type")
+                .register(meterRegistry);
+
+        this.txFailedCounter = Counter.builder("fintechwave.transaction.failed")
+                .description("Transaction failures, by type and reason")
+                .register(meterRegistry);
+
+        this.stripeWebhookCounter = Counter.builder("fintechwave.stripe.webhook.received")
+                .description("Stripe webhook events received, by type and outcome")
+                .register(meterRegistry);
+
+        this.p2pTransferTimer = Timer.builder("fintechwave.p2p.transfer.duration")
+                .description("End-to-end duration of P2P transfer initiation")
+                .register(meterRegistry);
+    }
 
     @Override
     @Transactional
     public TransactionResponse initiateP2PTransfer(UUID senderId, InitiateTransferRequest request) {
-        guardDuplicate(request.idempotencyKey());
+        Span currentSpan = Span.current();
+        currentSpan.setAttribute("fintechwave.transaction.type", "P2P");
+        currentSpan.setAttribute("fintechwave.transaction.currency", request.currency());
+        currentSpan.setAttribute("fintechwave.user.sender_id", senderId.toString());
 
-        if (senderId.equals(request.receiverId())) {
-            throw new InvalidTransactionStateException("Cannot transfer to yourself");
-        }
+        return p2pTransferTimer.record(() -> {
+            try (var ctx = BusinessContextMdc.of(senderId, null, "P2P_TRANSFER_INITIATED")) {
+                guardDuplicate(request.idempotencyKey());
 
-        BigDecimal fee = feeService.calculateFee(TransactionType.P2P, request.amount(), request.currency());
+                if (senderId.equals(request.receiverId())) {
+                    throw new InvalidTransactionStateException("Cannot transfer to yourself");
+                }
 
-        TransactionRecord tx = transactionRepository.save(
-                TransactionRecord.builder()
-                        .transactionType(TransactionType.P2P)
-                        .status(TransactionStatus.INITIATED)
-                        .senderId(senderId)
-                        .receiverId(request.receiverId())
-                        .amount(request.amount())
-                        .currency(request.currency())
-                        .feeAmount(fee)
-                        .idempotencyKey(request.idempotencyKey())
-                        .description(request.description())
-                        .build());
+                BigDecimal fee = feeService.calculateFee(TransactionType.P2P, request.amount(), request.currency());
 
-        try {
-            ledgerGrpcClient.reserveFundsSync(tx.getId(), senderId, request.amount().add(fee), request.currency());
-        } catch (Exception reserveEx) {
-            log.warn("Ledger reservation failed for txId={} — aborting: {}", tx.getId(), reserveEx.getMessage());
-            tx.setStatus(TransactionStatus.FAILED);
-            transactionRepository.save(tx);
-            throw reserveEx;
-        }
+                TransactionRecord tx = transactionRepository.save(
+                        TransactionRecord.builder()
+                                .transactionType(TransactionType.P2P)
+                                .status(TransactionStatus.INITIATED)
+                                .senderId(senderId)
+                                .receiverId(request.receiverId())
+                                .amount(request.amount())
+                                .currency(request.currency())
+                                .feeAmount(fee)
+                                .idempotencyKey(request.idempotencyKey())
+                                .description(request.description())
+                                .build());
 
-        publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_INITIATED", 1,
-                Map.of(
-                        "transactionId", tx.getId().toString(),
-                        "senderId", senderId.toString(),
-                        "receiverId", request.receiverId().toString(),
-                        "amount", request.amount().toPlainString(),
-                        "currency", request.currency(),
-                        "feeAmount", fee.toPlainString()));
+                MDC.put("transaction_id", tx.getId().toString());
+                currentSpan.setAttribute("fintechwave.transaction.id", tx.getId().toString());
 
-        log.info("P2P transfer initiated and reserved: txId={} senderId={} amount={} {}", tx.getId(),
-                senderId, request.amount(),
-                request.currency());
-        return TransactionResponse.from(tx);
+                try {
+                    ledgerGrpcClient.reserveFundsSync(tx.getId(), senderId, request.amount().add(fee),
+                            request.currency());
+                } catch (Exception reserveEx) {
+                    log.warn("Ledger reservation failed for txId={} — aborting: {}", tx.getId(),
+                            reserveEx.getMessage());
+                    tx.setStatus(TransactionStatus.FAILED);
+                    transactionRepository.save(tx);
+                    throw reserveEx;
+                }
+
+                publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_INITIATED", 1,
+                        Map.of(
+                                "transactionId", tx.getId().toString(),
+                                "senderId", senderId.toString(),
+                                "receiverId", request.receiverId().toString(),
+                                "amount", request.amount().toPlainString(),
+                                "currency", request.currency(),
+                                "feeAmount", fee.toPlainString()));
+
+                log.info("P2P transfer initiated and reserved: txId={} senderId={} amount={} {}", tx.getId(),
+                        senderId, request.amount(),
+                        request.currency());
+
+                Counter.builder("fintechwave.transaction.initiated")
+                        .description("Transactions successfully initiated, by type")
+                        .tags("type", "P2P", "currency", request.currency())
+                        .register(meterRegistry)
+                        .increment();
+
+                return TransactionResponse.from(tx);
+            } catch (Exception e) {
+                Counter.builder("fintechwave.transaction.failed")
+                        .description("Transaction failures, by type and reason")
+                        .tags("type", "P2P", "currency", request.currency(), "reason", e.getClass().getSimpleName())
+                        .register(meterRegistry)
+                        .increment();
+                throw e;
+            }
+        });
     }
 
     @Override
     @Transactional
     public TransactionResponse initiateCashIn(UUID userId, CashInRequest request) {
-        guardDuplicate(request.idempotencyKey());
+        Span currentSpan = Span.current();
+        currentSpan.setAttribute("fintechwave.transaction.type", "CASH_IN");
+        currentSpan.setAttribute("fintechwave.transaction.currency", request.currency());
+        currentSpan.setAttribute("fintechwave.user.sender_id", userId.toString());
 
-        // Create Stripe PaymentIntent
-        Money money = Money.of(request.amount(), request.currency());
-        CardPaymentIntent intent = paymentGateway.createCardPaymentIntent(money, request.stripePaymentMethodId());
+        try (var ctx = BusinessContextMdc.of(userId, null, "CASH_IN_INITIATED")) {
+            guardDuplicate(request.idempotencyKey());
 
-        TransactionRecord tx = transactionRepository.save(
-                TransactionRecord.builder()
-                        .transactionType(TransactionType.CASH_IN)
-                        .status(TransactionStatus.INITIATED)
-                        .senderId(userId)
-                        .amount(request.amount())
-                        .currency(request.currency())
-                        .feeAmount(BigDecimal.ZERO) // No fee for cash-in
-                        .stripePaymentIntentId(intent.paymentIntentId())
-                        .idempotencyKey(request.idempotencyKey())
-                        .description("Cash-in via card")
-                        .build());
+            // Create Stripe PaymentIntent
+            Money money = Money.of(request.amount(), request.currency());
+            CardPaymentIntent intent = paymentGateway.createCardPaymentIntent(money, request.stripePaymentMethodId());
 
-        log.info("Cash-in initiated: txId={} userId={} stripeIntentId={}", tx.getId(), userId,
-                intent.paymentIntentId());
-        // Ledger credit happens on payment_intent.succeeded webhook
-        return TransactionResponse.from(tx);
+            TransactionRecord tx = transactionRepository.save(
+                    TransactionRecord.builder()
+                            .transactionType(TransactionType.CASH_IN)
+                            .status(TransactionStatus.INITIATED)
+                            .senderId(userId)
+                            .amount(request.amount())
+                            .currency(request.currency())
+                            .feeAmount(BigDecimal.ZERO) // No fee for cash-in
+                            .stripePaymentIntentId(intent.paymentIntentId())
+                            .idempotencyKey(request.idempotencyKey())
+                            .description("Cash-in via card")
+                            .build());
+
+            MDC.put("transaction_id", tx.getId().toString());
+            currentSpan.setAttribute("fintechwave.transaction.id", tx.getId().toString());
+
+            log.info("Cash-in initiated: txId={} userId={} stripeIntentId={}", tx.getId(), userId,
+                    intent.paymentIntentId());
+
+            Counter.builder("fintechwave.transaction.initiated")
+                    .description("Transactions successfully initiated, by type")
+                    .tags("type", "CASH_IN", "currency", request.currency())
+                    .register(meterRegistry)
+                    .increment();
+
+            return TransactionResponse.from(tx);
+        } catch (Exception e) {
+            Counter.builder("fintechwave.transaction.failed")
+                    .description("Transaction failures, by type and reason")
+                    .tags("type", "CASH_IN", "currency", request.currency(), "reason", e.getClass().getSimpleName())
+                    .register(meterRegistry)
+                    .increment();
+            throw e;
+        }
     }
 
     @Override
     @Transactional
     public TransactionResponse initiateCashOut(UUID userId, CashOutRequest request) {
-        guardDuplicate(request.idempotencyKey());
+        Span currentSpan = Span.current();
+        currentSpan.setAttribute("fintechwave.transaction.type", "CASH_OUT");
+        currentSpan.setAttribute("fintechwave.transaction.currency", request.currency());
+        currentSpan.setAttribute("fintechwave.user.sender_id", userId.toString());
 
-        BigDecimal fee = feeService.calculateFee(TransactionType.CASH_OUT, request.amount(), request.currency());
+        try (var ctx = BusinessContextMdc.of(userId, null, "CASH_OUT_INITIATED")) {
+            guardDuplicate(request.idempotencyKey());
 
-        // RESERVE funds in ledger first (via outbox event to ledger-service)
-        TransactionRecord tx = transactionRepository.save(
-                TransactionRecord.builder()
-                        .transactionType(TransactionType.CASH_OUT)
-                        .status(TransactionStatus.INITIATED)
-                        .senderId(userId)
-                        .amount(request.amount())
-                        .currency(request.currency())
-                        .feeAmount(fee)
-                        .idempotencyKey(request.idempotencyKey())
-                        .description("Cash-out to card")
-                        .build());
+            BigDecimal fee = feeService.calculateFee(TransactionType.CASH_OUT, request.amount(), request.currency());
 
-        try {
-            ledgerGrpcClient.reserveFundsSync(tx.getId(), userId, request.amount().add(fee), request.currency());
-        } catch (Exception reserveEx) {
-            log.warn("Ledger reservation failed for cash-out txId={} — aborting: {}", tx.getId(),
-                    reserveEx.getMessage());
-            tx.setStatus(TransactionStatus.FAILED);
+            // RESERVE funds in ledger first (via outbox event to ledger-service)
+            TransactionRecord tx = transactionRepository.save(
+                    TransactionRecord.builder()
+                            .transactionType(TransactionType.CASH_OUT)
+                            .status(TransactionStatus.INITIATED)
+                            .senderId(userId)
+                            .amount(request.amount())
+                            .currency(request.currency())
+                            .feeAmount(fee)
+                            .idempotencyKey(request.idempotencyKey())
+                            .description("Cash-out to card")
+                            .build());
+
+            MDC.put("transaction_id", tx.getId().toString());
+            currentSpan.setAttribute("fintechwave.transaction.id", tx.getId().toString());
+
+            try {
+                ledgerGrpcClient.reserveFundsSync(tx.getId(), userId, request.amount().add(fee), request.currency());
+            } catch (Exception reserveEx) {
+                log.warn("Ledger reservation failed for cash-out txId={} — aborting: {}", tx.getId(),
+                        reserveEx.getMessage());
+                tx.setStatus(TransactionStatus.FAILED);
+                transactionRepository.save(tx);
+                throw reserveEx;
+            }
+
+            // Initiate Stripe Instant Payout
+            Money money = Money.of(request.amount(), request.currency());
+            PayoutResult payout = paymentGateway.initiateInstantPayout(request.stripePaymentMethodId(), money);
+
+            tx.setStripePayoutId(payout.payoutId());
+            tx.setStatus(TransactionStatus.RESERVED);
             transactionRepository.save(tx);
-            throw reserveEx;
+
+            // Publish event — ledger-service listens to commit on payout.paid webhook
+            publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_OUT_INITIATED", 1,
+                    Map.of(
+                            "transactionId", tx.getId().toString(),
+                            "userId", userId.toString(),
+                            "amount", request.amount().toPlainString(),
+                            "currency", request.currency(),
+                            "stripePayoutId", payout.payoutId()));
+
+            log.info("Cash-out initiated: txId={} userId={} stripePayoutId={}", tx.getId(), userId, payout.payoutId());
+
+            Counter.builder("fintechwave.transaction.initiated")
+                    .description("Transactions successfully initiated, by type")
+                    .tags("type", "CASH_OUT", "currency", request.currency())
+                    .register(meterRegistry)
+                    .increment();
+
+            return TransactionResponse.from(tx);
+        } catch (Exception e) {
+            Counter.builder("fintechwave.transaction.failed")
+                    .description("Transaction failures, by type and reason")
+                    .tags("type", "CASH_OUT", "currency", request.currency(), "reason", e.getClass().getSimpleName())
+                    .register(meterRegistry)
+                    .increment();
+            throw e;
         }
-
-        // Initiate Stripe Instant Payout
-        Money money = Money.of(request.amount(), request.currency());
-        PayoutResult payout = paymentGateway.initiateInstantPayout(request.stripePaymentMethodId(), money);
-
-        tx.setStripePayoutId(payout.payoutId());
-        tx.setStatus(TransactionStatus.RESERVED);
-        transactionRepository.save(tx);
-
-        // Publish event — ledger-service listens to commit on payout.paid webhook
-        publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_OUT_INITIATED", 1,
-                Map.of(
-                        "transactionId", tx.getId().toString(),
-                        "userId", userId.toString(),
-                        "amount", request.amount().toPlainString(),
-                        "currency", request.currency(),
-                        "stripePayoutId", payout.payoutId()));
-
-        log.info("Cash-out initiated: txId={} userId={} stripePayoutId={}", tx.getId(), userId, payout.payoutId());
-        return TransactionResponse.from(tx);
     }
 
     @Override
@@ -180,28 +289,45 @@ public class TransactionServiceImpl implements ITransactionService {
         WebhookEvent event = paymentGateway.parseAndValidateWebhook(rawPayload, signature);
         log.info("Stripe webhook received: type={}", event.eventType());
 
-        switch (event.eventType()) {
-            case "payment_intent.succeeded" -> handlePaymentIntentSucceeded(event.objectId());
-            case "payment_intent.payment_failed" -> handlePaymentIntentFailed(event.objectId());
-            case "payout.paid" -> handlePayoutPaid(event.objectId());
-            case "payout.failed" -> handlePayoutFailed(event.objectId());
-            default -> log.debug("Unhandled Stripe webhook type: {}", event.eventType());
+        try {
+            switch (event.eventType()) {
+                case "payment_intent.succeeded" -> handlePaymentIntentSucceeded(event.objectId());
+                case "payment_intent.payment_failed" -> handlePaymentIntentFailed(event.objectId());
+                case "payout.paid" -> handlePayoutPaid(event.objectId());
+                case "payout.failed" -> handlePayoutFailed(event.objectId());
+                default -> log.debug("Unhandled Stripe webhook type: {}", event.eventType());
+            }
+
+            Counter.builder("fintechwave.stripe.webhook.received")
+                    .description("Stripe webhook events received, by type and outcome")
+                    .tags("event_type", event.eventType(), "outcome", "processed")
+                    .register(meterRegistry)
+                    .increment();
+        } catch (Exception e) {
+            Counter.builder("fintechwave.stripe.webhook.received")
+                    .description("Stripe webhook events received, by type and outcome")
+                    .tags("event_type", event.eventType(), "outcome", "failed")
+                    .register(meterRegistry)
+                    .increment();
+            throw e;
         }
     }
 
     private void handlePaymentIntentSucceeded(String paymentIntentId) {
         transactionRepository.findByStripePaymentIntentId(paymentIntentId)
                 .ifPresentOrElse(tx -> {
-                    tx.setStatus(TransactionStatus.PENDING_LEDGER);
-                    transactionRepository.save(tx);
+                    try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(), "CASH_IN_COMPLETED")) {
+                        tx.setStatus(TransactionStatus.PENDING_LEDGER);
+                        transactionRepository.save(tx);
 
-                    publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_IN_COMPLETED", 1,
-                            Map.of("transactionId", tx.getId().toString(),
-                                    "userId", tx.getSenderId().toString(),
-                                    "amount", tx.getAmount().toPlainString(),
-                                    "currency", tx.getCurrency()));
+                        publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_IN_COMPLETED", 1,
+                                Map.of("transactionId", tx.getId().toString(),
+                                        "userId", tx.getSenderId().toString(),
+                                        "amount", tx.getAmount().toPlainString(),
+                                        "currency", tx.getCurrency()));
 
-                    log.info("Cash-in completed via Stripe webhook: txId={}", tx.getId());
+                        log.info("Cash-in completed via Stripe webhook: txId={}", tx.getId());
+                    }
                 }, () -> log.warn("No transaction found for payment_intent.succeeded: paymentIntentId={}",
                         paymentIntentId));
     }
@@ -209,14 +335,16 @@ public class TransactionServiceImpl implements ITransactionService {
     private void handlePaymentIntentFailed(String paymentIntentId) {
         transactionRepository.findByStripePaymentIntentId(paymentIntentId)
                 .ifPresentOrElse(tx -> {
-                    tx.setStatus(TransactionStatus.FAILED);
-                    transactionRepository.save(tx);
+                    try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(), "CASH_IN_FAILED")) {
+                        tx.setStatus(TransactionStatus.FAILED);
+                        transactionRepository.save(tx);
 
-                    publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_IN_FAILED", 1,
-                            Map.of("transactionId", tx.getId().toString(),
-                                    "userId", tx.getSenderId().toString()));
+                        publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_IN_FAILED", 1,
+                                Map.of("transactionId", tx.getId().toString(),
+                                        "userId", tx.getSenderId().toString()));
 
-                    log.warn("Cash-in failed via Stripe webhook: txId={}", tx.getId());
+                        log.warn("Cash-in failed via Stripe webhook: txId={}", tx.getId());
+                    }
                 }, () -> log.warn("No transaction found for payment_intent.payment_failed: paymentIntentId={}",
                         paymentIntentId));
     }
@@ -224,30 +352,34 @@ public class TransactionServiceImpl implements ITransactionService {
     private void handlePayoutPaid(String payoutId) {
         transactionRepository.findByStripePayoutId(payoutId)
                 .ifPresentOrElse(tx -> {
-                    tx.setStatus(TransactionStatus.PENDING_LEDGER);
-                    transactionRepository.save(tx);
+                    try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(), "CASH_OUT_COMPLETED")) {
+                        tx.setStatus(TransactionStatus.PENDING_LEDGER);
+                        transactionRepository.save(tx);
 
-                    publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_OUT_COMPLETED", 1,
-                            Map.of("transactionId", tx.getId().toString(),
-                                    "userId", tx.getSenderId().toString(),
-                                    "amount", tx.getAmount().toPlainString(),
-                                    "currency", tx.getCurrency()));
+                        publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_OUT_COMPLETED", 1,
+                                Map.of("transactionId", tx.getId().toString(),
+                                        "userId", tx.getSenderId().toString(),
+                                        "amount", tx.getAmount().toPlainString(),
+                                        "currency", tx.getCurrency()));
 
-                    log.info("Cash-out completed via payout.paid webhook: txId={}", tx.getId());
+                        log.info("Cash-out completed via payout.paid webhook: txId={}", tx.getId());
+                    }
                 }, () -> log.warn("No transaction found for payout.paid: payoutId={}", payoutId));
     }
 
     private void handlePayoutFailed(String payoutId) {
         transactionRepository.findByStripePayoutId(payoutId)
                 .ifPresentOrElse(tx -> {
-                    tx.setStatus(TransactionStatus.FAILED);
-                    transactionRepository.save(tx);
+                    try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(), "CASH_OUT_FAILED")) {
+                        tx.setStatus(TransactionStatus.FAILED);
+                        transactionRepository.save(tx);
 
-                    publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_OUT_FAILED", 1,
-                            Map.of("transactionId", tx.getId().toString(),
-                                    "userId", tx.getSenderId().toString()));
+                        publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_OUT_FAILED", 1,
+                                Map.of("transactionId", tx.getId().toString(),
+                                        "userId", tx.getSenderId().toString()));
 
-                    log.warn("Cash-out failed via payout.failed webhook: txId={}", tx.getId());
+                        log.warn("Cash-out failed via payout.failed webhook: txId={}", tx.getId());
+                    }
                 }, () -> log.warn("No transaction found for payout.failed: payoutId={}", payoutId));
     }
 
@@ -286,39 +418,45 @@ public class TransactionServiceImpl implements ITransactionService {
             return;
         }
 
-        if (approved) {
-            tx.setStatus(TransactionStatus.COMPLETED);
-            publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_COMPLETED", 1,
-                    Map.of("transactionId", tx.getId().toString(),
-                            "senderId", tx.getSenderId().toString(),
-                            "receiverId", tx.getReceiverId().toString(),
-                            "amount", tx.getAmount().toPlainString(),
-                            "currency", tx.getCurrency()));
-            log.info("P2P transfer approved by fraud, completing: txId={}", tx.getId());
-        } else {
-            tx.setStatus(TransactionStatus.FAILED);
-            // For release, we must release the amount + fee back to the sender
-            publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_FAILED", 1,
-                    Map.of("transactionId", tx.getId().toString(),
-                            "senderId", tx.getSenderId().toString(),
-                            "amount", tx.getAmount().add(tx.getFeeAmount()).toPlainString(),
-                            "currency", tx.getCurrency()));
-            log.info("P2P transfer rejected by fraud, failing: txId={}", tx.getId());
+        try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(),
+                approved ? "TRANSFER_COMPLETED" : "TRANSFER_FAILED")) {
+            if (approved) {
+                tx.setStatus(TransactionStatus.COMPLETED);
+                publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_COMPLETED", 1,
+                        Map.of("transactionId", tx.getId().toString(),
+                                "senderId", tx.getSenderId().toString(),
+                                "receiverId", tx.getReceiverId().toString(),
+                                "amount", tx.getAmount().toPlainString(),
+                                "currency", tx.getCurrency()));
+                log.info("P2P transfer approved by fraud, completing: txId={}", tx.getId());
+            } else {
+                tx.setStatus(TransactionStatus.FAILED);
+                // For release, we must release the amount + fee back to the sender
+                publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_FAILED", 1,
+                        Map.of("transactionId", tx.getId().toString(),
+                                "senderId", tx.getSenderId().toString(),
+                                "amount", tx.getAmount().add(tx.getFeeAmount()).toPlainString(),
+                                "currency", tx.getCurrency()));
+                log.info("P2P transfer rejected by fraud, failing: txId={}", tx.getId());
+            }
+            transactionRepository.save(tx);
         }
-        transactionRepository.save(tx);
     }
 
     @Override
     @Transactional
     public void markLedgerCommitted(UUID transactionId) {
         transactionRepository.findById(transactionId).ifPresentOrElse(tx -> {
-            if (tx.getStatus() == TransactionStatus.PENDING_LEDGER) {
-                tx.setStatus(TransactionStatus.COMPLETED);
-                transactionRepository.save(tx);
-                log.info("Ledger confirmed, transaction marked COMPLETED: txId={}", transactionId);
-            } else {
-                log.warn("markLedgerCommitted called but tx is not PENDING_LEDGER: txId={} status={}", transactionId,
-                        tx.getStatus());
+            try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(), "LEDGER_COMMITTED")) {
+                if (tx.getStatus() == TransactionStatus.PENDING_LEDGER) {
+                    tx.setStatus(TransactionStatus.COMPLETED);
+                    transactionRepository.save(tx);
+                    log.info("Ledger confirmed, transaction marked COMPLETED: txId={}", transactionId);
+                } else {
+                    log.warn("markLedgerCommitted called but tx is not PENDING_LEDGER: txId={} status={}",
+                            transactionId,
+                            tx.getStatus());
+                }
             }
         }, () -> log.warn("markLedgerCommitted: transaction not found txId={}", transactionId));
     }
