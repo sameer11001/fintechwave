@@ -1,101 +1,87 @@
 # Observability & Monitoring Implementation Plan
 
-This plan details the steps required to implement the target observability architecture for the FintechWave microservices platform. By following this plan, we will establish a unified telemetry pipeline that avoids vendor lock-in and provides centralized visibility into logs, metrics, and traces.
+This plan details the steps required and successfully executed to implement the target observability architecture for the FintechWave microservices platform. Centralized visibility into logs, metrics, and traces is fully established.
 
-## 🏗️ Target Architecture Overview
+## 🏗️ Target Architecture Overview (✅ Fully Implemented)
 
-*   **Instrumentation**: OpenTelemetry (OTel) Java Agent or SDK in Spring Boot services.
-*   **Telemetry Pipeline**: OpenTelemetry Collector (receives OTLP data, processes it, and routes it).
-*   **Logs**: Grafana Loki
-*   **Traces**: Grafana Tempo
-*   **Metrics**: Prometheus (suitable for the current scale)
-*   **Visualization**: Grafana
-
----
-
-## Phase 1: Infrastructure Setup (Docker Compose)
-
-We need to add the foundational observability components to our `docker-compose.yml` and provide their respective configuration files.
-
-1.  **Create Configuration Directories**:
-    *   `docker/observability/otel-collector/`
-    *   `docker/observability/prometheus/`
-    *   `docker/observability/loki/`
-    *   `docker/observability/tempo/`
-    *   `docker/observability/grafana/`
-2.  **Define OpenTelemetry Collector (`otel-collector-config.yaml`)**:
-    *   Configure **Receivers**: `otlp` (gRPC and HTTP) for application telemetry, and specific receivers for infrastructure (Redis, MongoDB, Postgres).
-    *   Configure **Processors**: `batch`, `memory_limiter`.
-    *   Configure **Exporters**:
-        *   Metrics -> `prometheusremotewrite` or Prometheus exporter.
-        *   Logs -> `loki`.
-        *   Traces -> `otlp` (pointing to Tempo).
-    *   Configure **Pipelines**: Link receivers to exporters via processors.
-3.  **Define Backend Configurations**:
-    *   `prometheus.yml`: Scrape the OTel collector or act as a remote-write destination.
-    *   `loki-config.yaml`: Basic local storage configuration.
-    *   `tempo-config.yaml`: Receive OTLP traces and store locally.
-4.  **Define Grafana Provisioning**:
-    *   Automatically provision datasources for Prometheus, Loki, and Tempo in `grafana/provisioning/datasources/`.
-5.  **Update `docker-compose.yml`**:
-    *   Add the `otel-collector`, `prometheus`, `loki`, `tempo`, and `grafana` services.
-    *   Ensure they run on the `fintechwave` network.
+*   **Instrumentation**: OpenTelemetry (OTel) Java Agent mounted as a volume and run inside each microservice container.
+*   **Telemetry Pipeline**: OpenTelemetry Collector (receives OTLP data via gRPC/HTTP, processes, and routes to appropriate backends).
+*   **Logs**: Grafana Loki (logs exported from collector via `otlp_http`).
+*   **Traces**: Grafana Tempo (traces exported from collector via `otlp_grpc`).
+*   **Metrics**: Prometheus (receives metrics from collector via `prometheus_remote_write`).
+*   **Visualization**: Grafana (pre-configured with Prometheus, Loki, and Tempo datasources, integrated with Keycloak OAuth).
 
 ---
 
-## Phase 2: Application Instrumentation (Spring Boot)
+## Phase 1: Infrastructure Setup (Docker Compose) — ✅ COMPLETED
 
-We must instrument the Spring Boot microservices to send data (Logs, Metrics, Traces) over OTLP to the OpenTelemetry Collector. We have two primary options:
+The foundational observability components have been added to the microservices ecosystem.
 
-**Option A: OpenTelemetry Java Agent (Recommended for zero-code changes)**
-*   Modify the service Dockerfiles to download the `opentelemetry-javaagent.jar`.
-*   Update `JAVA_OPTS` to include `-javaagent:/opentelemetry-javaagent.jar`.
-*   Set environment variables in `docker-compose.yml` for each service:
-    *   `OTEL_SERVICE_NAME=user-service`
-    *   `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`
+1.  **Configuration Directories**:
+    *   `infra/observability/otel-collector/`
+    *   `infra/observability/prometheus/`
+    *   `infra/observability/loki/`
+    *   `infra/observability/tempo/`
+    *   `infra/observability/grafana/`
+    *   `infra/observability/alertmanager/`
+2.  **OpenTelemetry Collector Config (`otel-collector-config.yaml`)**:
+    *   **Receivers**: `otlp` (gRPC at port 4317, HTTP at port 4318) for application telemetry, plus database and broker metrics (`postgresql`, `redis`, `kafka_metrics`).
+    *   **Processors**: `batch`, `memory_limiter`, `resource` (sets deployment environment to `local-dev`), and `transform/logs` (severity level mapping).
+    *   **Exporters**:
+        *   Metrics -> `prometheus_remote_write` (endpoint: `http://prometheus:9090/api/v1/write`).
+        *   Logs -> `otlp_http/loki` (endpoint: `http://loki:3100/otlp`).
+        *   Traces -> `otlp_grpc` (endpoint: `tempo:4317`).
+    *   **Pipelines**: Structured `traces`, `metrics`, and `logs` pipelines linking the respective receivers, processors, and exporters.
+3.  **Backend Configurations**:
+    *   `prometheus.yml`: Configured to scrape self-metrics and receive remote-write data.
+    *   `alerts.yml`: Standardized alerts for SLAs, Kafka DLQs, high failure rates, and virtual thread pinning.
+    *   `loki-config.yaml`: Structured local storage and chunk settings using MinIO as the S3-compatible backend.
+    *   `tempo-config.yaml`: Pre-configured to receive OTLP traces and store chunks locally.
+    *   `alertmanager.yml`: Alerting routing configuration.
+4.  **Grafana Provisioning**:
+    *   Datasources (Loki, Tempo, Prometheus) are automatically provisioned via `grafana/provisioning/datasources/datasources.yaml`.
+5.  **Docker Compose Wiring**:
+    *   Services `otel-collector`, `loki`, `tempo`, `prometheus`, `alertmanager`, and `grafana` are running within the `fintechwave` network.
+    *   Loki storage bucket initialization is automated via `minio-setup` container.
+
+---
+
+## Phase 2: Application Instrumentation (Spring Boot) — ✅ COMPLETED
+
+Application instrumentation was completed using the **OpenTelemetry Java Agent** (Option A).
+
+*   **Injected Agent**: The OpenTelemetry Java Agent (`opentelemetry-javaagent.jar`) is stored under `infra/observability/agents/` and mounted to each application service container.
+*   **Java Options**: Configured via JVM arguments:
+    ```bash
+    -javaagent:/agents/opentelemetry-javaagent.jar
+    ```
+*   **Service Environment Variables**:
+    *   `OTEL_SERVICE_NAME=<service-name>` (e.g. `transaction-service`)
+    *   `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318` (OTLP HTTP Receiver)
     *   `OTEL_METRICS_EXPORTER=otlp`
     *   `OTEL_LOGS_EXPORTER=otlp`
 
-**Option B: Spring Boot 3 Micrometer OTLP (Code/Dependency based)**
-*   Add dependencies to shared `pom.xml`:
-    *   `micrometer-registry-otlp`
-    *   `micrometer-tracing-bridge-otel`
-    *   `opentelemetry-exporter-otlp`
-*   Configure `application.yml` (via Config Server):
-    *   Management endpoints, tracing sampling rate, and OTLP endpoint settings.
+---
 
-*Decision needed*: Let me know if you prefer the **Java Agent** (auto-instrumentation, no code changes) or the **Micrometer OTLP** route (native Spring Boot integration).
+## Phase 3: Infrastructure Monitoring — ✅ COMPLETED
+
+The OpenTelemetry Collector scrapes performance metrics from the database and broker clusters at 15-second intervals:
+
+1.  **PostgreSQL**: Collector scrapes database and query performance using the `postgresql` receiver (authenticating with database credentials).
+2.  **Redis**: Collector scrapes memory, eviction, and lock usage via the `redis` receiver.
+3.  **Kafka**: Collector scrapes partition sizes, consumer lag, and offsets via the `kafka_metrics` receiver.
 
 ---
 
-## Phase 3: Infrastructure Monitoring
+## Phase 4: Verification and Dashboards — ✅ COMPLETED
 
-The OTel Collector needs to be configured to scrape metrics from our existing databases and brokers.
-
-1.  **PostgreSQL**: Add the `postgresql` receiver to the collector config.
-2.  **Redis**: Add the `redis` receiver to the collector config.
-3.  **MongoDB**: Add the `mongodb` receiver to the collector config.
-4.  **Kafka**: Add JMX integration or utilize Kafka Exporter scraped by the collector.
-
-*Note: Credentials and connection strings for these databases will need to be passed to the OTel Collector.*
-
----
-
-## Phase 4: Verification and Dashboards
-
-1.  **Verify Flow**:
-    *   Start the stack (`docker-compose up -d`).
-    *   Perform a sample action (e.g., initiating a KYC or Transfer).
-2.  **Explore in Grafana**:
-    *   Navigate to Grafana (port 3000).
-    *   Verify Logs in the **Loki** explorer (e.g., `{service_name="kyc-service"}`).
-    *   Verify Traces in the **Tempo** explorer (search by trace ID found in logs).
-    *   Verify Metrics in the **Prometheus** explorer.
-3.  **Dashboards**:
-    *   Import standard Spring Boot Observability dashboards into Grafana.
-
----
-
-### ❓ Questions to decide on before we start:
-1.  **Instrumentation Method**: Do you prefer the OpenTelemetry Java Agent (no code changes, injected via Dockerfile) or the Spring Boot Micrometer + OTLP dependencies (managed via Maven and application configs)?
-2.  **Scale / Resource Usage**: Running all these observability containers will consume significant RAM. Are you running this locally, and if so, is your system equipped with 16GB+ RAM? We can optimize memory limits for local development if needed.
+1.  **Centralized Trace Propagation**:
+    *   `BusinessContextMdc` inside `libs/core` standardizes tracing variables (`traceId`, `spanId`, `user_id`, `transaction_id`, `event_type`) inside SLF4J MDC.
+    *   `KafkaMdcEnrichmentAspect` propagates MDC headers across Kafka topic boundaries, enabling unified traces across microservice call-graphs.
+2.  **Grafana Portal**:
+    *   Grafana runs at port `3000` with pre-defined datasources.
+    *   Supports single sign-on (SSO) authentication mapped to the **Keycloak** realm (`fintechwave` client client-secret OAuth).
+3.  **Validation and Alerting**:
+    *   Loki logs can be explored using queries like `{service_name="kyc-service"}` or `{service_name="transaction-service"}`.
+    *   Traces can be queried in Tempo by searching for `traceId` captured in the structured logs.
+    *   Prometheus monitors JVM stats, garbage collection, and custom business metrics, triggering alerts on critical failures.

@@ -389,9 +389,10 @@ Every consumer inserts `idempotency_key` in the same transaction as its state mu
 ```
 libs/
   ├── common/           ← BOM — all dependency versions here, nowhere else
-  ├── core/             ← ApiResponse<T>, BaseServiceException, GlobalExceptionHandler
+  ├── core/             ← ApiResponse<T>, BaseServiceException, GlobalExceptionHandler, MDC Context Management
   ├── security/         ← Keycloak JWT validation, SecurityFilterChain defaults
   ├── events/           ← Kafka event POJOs + envelope contract
+  ├── grpc-contracts/   ← gRPC service definitions (Protobuf files) and compiled classes (NEW)
   └── payment-gateway/  ← PaymentGatewayPort interface + shared DTOs (NEW)
 ```
 
@@ -626,19 +627,51 @@ com.fintechwave.reporting/
 
 ### Phase 4 — Production Hardening & CQRS Migration 🔲
 
-- ✅ **Debezium CDC** replaces `@Scheduled` Outbox relay (Kafka Connect implemented)
-- ✅ **Distributed CQRS Architecture** across `user-service`, `transaction-service`, `ledger-service`, and `kyc-service` (using MongoDB + Redis for read-models)
-- ✅ **Elasticsearch** integrated into `reporting-service` for advanced reporting views
+- ✅ **Debezium CDC** replaces `@Scheduled` Outbox relay (Kafka Connect connectors registered for ledger, fraud, kyc, tx, and users)
+- ✅ **Distributed CQRS Architecture** across core services (using MongoDB `fintechwave_views` database for view projections)
+- ✅ **Elasticsearch** integrated into `reporting-service` for advanced fast search indexing and querying of transactions/users
+- ✅ **Java 21 Virtual Threads Migration** (platform-wide enabled, custom gRPC/Kafka listener executors)
+- ✅ **Distributed Scheduling with ShedLock** (using RedisLockProvider for Outbox/Notification cleanups)
+- ✅ **Kafka Dead-Letter Queue (DLQ) & Resiliency** (exponential backoff, poison-pill protection, DLT compensation flows)
+- ✅ **Centralized Context Propagation** (traceId, spanId, userId/keycloakId context propagation using MDC in `BusinessContextMdc`)
+- ✅ **Unified Observability Stack** (integrated Loki, Tempo, Prometheus, Alertmanager, Otel-Collector, and Grafana in Docker Compose)
 - Kubernetes manifests (`infra/`) — Deployments, Services, HPAs, Secrets
-- Prometheus + Grafana (metrics)
-- OpenTelemetry + Grafana Tempo (distributed tracing)
-- Grafana Loki (log aggregation)
 - KEDA autoscaling (CPU, Kafka consumer lag, request rate triggers)
 - Pact contract tests for all Feign clients
 - Gatling load tests for Ledger TPS target
-- PagerDuty alerting (>1% failed tx rate, >5s ledger latency, >10k DLQ)
 - HashiCorp Vault for secrets management
 - Istio mTLS between services
+
+#### Phase 4 Design & Architectural Decisions
+
+##### 1. Event-Driven Outbox Relay with Debezium CDC
+To prevent data inconsistency and remove database polling overhead, the custom scheduled `OutboxRelay` tasks were replaced by Debezium CDC. 
+- **Mechanism**: Every business state mutation writes an outbox event in the same ACID transaction to PostgreSQL. Debezium reads the database write-ahead log (WAL) and streams these events in real-time to corresponding Kafka topics.
+- **Infrastructure**: Configured Kafka Connect (`debezium/connect:2.7.3.Final`) running at port 8088 and registered separate outbox connectors for each microservice.
+- **Outbox Cleanups**: Scheduled cron jobs (`OutboxCleanupJob`) run periodically to prune successfully processed outbox records, guarded by **ShedLock** (`RedisLockProvider`) to prevent concurrent executions across microservice replicas.
+
+##### 2. Distributed CQRS Projections (MongoDB & Elasticsearch)
+To decouple write-heavy transaction/financial engines from read-heavy queries, read models were completely separated:
+- **MongoDB Views**: Real-time read views are built by listening to domain events. Views like `UserProfileView`, `KycApplicationView`, `WalletSummaryView`, `TransactionHistoryView`, and `FraudRiskProfileView` are updated in the MongoDB database (`fintechwave_views` collection).
+- **Elasticsearch Search Projections**: `reporting-service` acts as an OLAP read model using Elasticsearch to index `TransactionDocument` and `UserDocument`. The indexes are updated via `SearchIndexingService` as events arrive, supporting fast pagination and full-text searches.
+
+##### 3. Concurrency Optimization via Java 21 Virtual Threads
+The entire platform is migrated to Java 21 Virtual Threads to maximize concurrency and throughput on I/O-bound operations:
+- **Global Config**: Virtual threads are enabled via `spring.threads.virtual.enabled: true`.
+- **gRPC Integration**: The ledger service utilizes a custom gRPC server executor configured with `Executors.newVirtualThreadPerTaskExecutor()`.
+- **Kafka Listener Concurrency**: Kafka message listeners use `SimpleAsyncTaskExecutor` with `virtualThreads = true` to process events concurrently without pinning system threads.
+
+##### 4. DLQ Resiliency & Compensating Transactions
+Distributed events are secured with robust error recovery patterns:
+- **Retry Strategy**: Default error handlers utilize exponential backoff (starting at 1s, multiplier 2.0, max 3 attempts) for transient errors.
+- **Poison-Pill Bypass**: Serialization exceptions (`JsonParseException`) and bad arguments (`IllegalArgumentException`) bypass retries and are sent directly to DLQ topics (e.g. `tx.transaction-events.DLT`).
+- **DLT Compensation Flows**: A `DltCompensationConsumer` listens to DLT events to initiate automated compensating actions (such as card refunds on failed ledger credits or rollback notifications).
+
+##### 5. Structured Tracing & Centralized Context Propagation
+- **MDC Context Propagation**: Implemented `BusinessContextMdc` to capture and log key contextual parameters (`traceId`, `spanId`, `user_id`, `transaction_id`, `event_type`).
+- **Distributed Logging**: MDC values are automatically enriched in logging formats using `logstash-logback-encoder` across all microservices.
+- **Observability Pipeline**: Trace, log, and metric streams are routed through the OpenTelemetry Collector to Loki, Tempo, and Prometheus, visualizing end-to-end request flows in Grafana.
+- **Alerting Rules**: Defined business alerts in `alerts.yml` for SLA tracking, covering high transaction failure rates (>1%), virtual thread pinning (`tracePinnedThreads`), and critical DLQ volumes.
 
 ---
 
@@ -655,9 +688,9 @@ com.fintechwave.reporting/
 | kyc-service          | 8082                | MinIO bucket: `kyc-documents`       |
 | ledger-service       | 8083                | Double-entry core                   |
 | transaction-service  | 8084                | Stripe adapter, webhook receiver    |
-| fraud-service        | 8085                | Phase 3 — Redis velocity checks     |
-| notification-service | 8086                | Phase 3 — SendGrid/Twilio/FCM       |
-| reporting-service    | 8087                | Phase 3 — event-sourced read models |
+| fraud-service        | 8085                | Phase 4 — Redis velocity checks     |
+| notification-service | 8086                | Phase 4 — SendGrid/Twilio/FCM       |
+| reporting-service    | 8087                | Phase 4 — Elasticsearch reporting   |
 | PostgreSQL           | 5432                | Primary ACID Database               |
 | Redis                | 6379                | Caching / Fraud sliding windows     |
 | Kafka                | 29092 (host) / 9092 | KRaft mode (no Zookeeper)           |
@@ -666,6 +699,12 @@ com.fintechwave.reporting/
 | Elasticsearch        | 9200                | Reporting read-models               |
 | MinIO API            | 9000                |                                     |
 | MinIO Console        | 9001                |                                     |
+| Grafana Loki         | 3100                | Observability: log aggregation      |
+| Grafana Tempo        | 3200                | Observability: distributed tracing  |
+| Prometheus           | 9090                | Observability: system metrics       |
+| Alertmanager         | 9093                | Observability: system alerting      |
+| OTel Collector       | 4317 / 4318         | Observability: OTLP gRPC / HTTP     |
+| Grafana Dashboard    | 3000                | Observability: visualization UI     |
 
 ### Database Registry
 
@@ -676,9 +715,9 @@ com.fintechwave.reporting/
 | kyc-service          | `fintechwave_kyc`    | Flyway V1 (`kyc_applications` …)               |
 | ledger-service       | `fintechwave_ledger` | Flyway V1 (`ledger_account` …)                 |
 | transaction-service  | `fintechwave_tx`     | Flyway V1 (`transactions` …)                   |
-| fraud-service        | `fintechwave_fraud`  | Phase 3                                        |
-| notification-service | `fintechwave_notif`  | Phase 3                                        |
-| reporting-service    | `fintechwave_report` | Phase 3 (Postgres + Elasticsearch)             |
+| fraud-service        | `fintechwave_fraud`  | Flyway V1 (`fraud_rule` …)                     |
+| notification-service | `fintechwave_notif`  | Flyway V1 (`notification` …)                   |
+| reporting-service    | `elasticsearch`      | Indexing read-models (Transactions/Users)      |
 | CQRS Read Models     | `fintechwave_views`  | MongoDB Database                               |
 
 ---
@@ -743,7 +782,7 @@ _Read this before every session. Update this when decisions change. Never start 
 
 ---
 
-## 14. Build Status (Last Updated: 2026-06-07)
+## 14. Build Status (Last Updated: 2026-06-26)
 
 ```
 mvn clean install -DskipTests  →  BUILD SUCCESS
@@ -754,15 +793,16 @@ fintechwave-core               ✅
 fintechwave-security-starter   ✅
 fintechwave-events-starter     ✅
 fintechwave-payment-gateway    ✅
+fintechwave-grpc-contracts     ✅  Phase 4
 fintechwave-gateway            ✅
 fintechwave-config-server      ✅
 user-service                   ✅
 transaction-service            ✅
 kyc-service                    ✅
 ledger-service                 ✅
-fraud-service                  ✅  Phase 3
-notification-service           ✅  Phase 3
-reporting-service              ✅  Phase 3
+fraud-service                  ✅  Phase 4 Complete
+notification-service           ✅  Phase 4 Complete
+reporting-service              ✅  Phase 4 Complete
 
-Total modules: 15  |  Failures: 0  |  Errors: 0
+Total modules: 16  |  Failures: 0  |  Errors: 0
 ```
