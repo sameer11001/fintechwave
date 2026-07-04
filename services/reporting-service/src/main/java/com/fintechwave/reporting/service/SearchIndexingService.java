@@ -20,7 +20,8 @@ public class SearchIndexingService {
     private final TransactionSearchRepository txSearchRepo;
     private final UserSearchRepository userSearchRepo;
 
-    public void indexTransaction(UUID txId, UUID senderId, UUID receiverId, BigDecimal amount, String currency, String type, String status, Instant occurredAt) {
+    public void indexTransaction(UUID txId, UUID senderId, UUID receiverId, BigDecimal amount, String currency,
+            String type, String status, Instant occurredAt) {
         TransactionDocument doc = TransactionDocument.builder()
                 .id(txId.toString())
                 .senderId(senderId != null ? senderId.toString() : null)
@@ -35,7 +36,8 @@ public class SearchIndexingService {
         log.info("Indexed transaction into Elasticsearch: {}", txId);
     }
 
-    public void indexUserRegistration(UUID userId, UUID keycloakId, String email, String firstName, String lastName, String status) {
+    public void indexUserRegistration(UUID userId, UUID keycloakId, String email, String firstName, String lastName,
+            String status) {
         UserDocument doc = UserDocument.builder()
                 .id(userId.toString())
                 .keycloakId(keycloakId.toString())
@@ -50,10 +52,11 @@ public class SearchIndexingService {
     }
 
     public void indexKycUpdate(UUID userId, String kycTier) {
-        userSearchRepo.findById(userId.toString()).ifPresent(doc -> {
-            doc.setKycTier(kycTier);
-            userSearchRepo.save(doc);
-            log.info("Updated KYC tier in Elasticsearch for user: {}", userId);
-        });
+        userSearchRepo.findByKeycloakId(userId.toString())
+                .ifPresent(doc -> {
+                    doc.setKycTier(kycTier);
+                    userSearchRepo.save(doc);
+                    log.info("Updated KYC tier in Elasticsearch for user: {}", userId);
+                });
     }
 }

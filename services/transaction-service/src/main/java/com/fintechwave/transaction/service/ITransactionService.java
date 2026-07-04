@@ -36,7 +36,8 @@ public interface ITransactionService {
 
     /**
      * Initiates a cash-out via Stripe Instant Payout.
-     * Flow: RESERVE funds → call Stripe Instant Payout → on payout.paid webhook → COMMIT.
+     * Flow: RESERVE funds → call Stripe Instant Payout → on payout.paid webhook →
+     * COMMIT.
      *
      * @param userId  Initiating user's Keycloak ID (from JWT)
      * @param request Cash-out amount and Stripe payment method ID
@@ -49,20 +50,10 @@ public interface ITransactionService {
      * Routes payout.paid → ledger commit.
      * Routes *.failed → release reserved funds + mark FAILED.
      *
-     * @param rawPayload  Raw request body — must be passed before any parsing
-     * @param signature   Stripe-Signature header value
+     * @param rawPayload Raw request body — must be passed before any parsing
+     * @param signature  Stripe-Signature header value
      */
     void handleStripeWebhook(String rawPayload, String signature);
-
-    /**
-     * Returns paginated transaction history for the calling user.
-     */
-    Page<TransactionResponse> getMyTransactions(UUID userId, Pageable pageable);
-
-    /**
-     * Returns a single transaction by ID — caller must be sender or receiver.
-     */
-    TransactionResponse getTransactionById(UUID transactionId, UUID callerId);
 
     void handleFraudDecision(UUID transactionId, boolean approved);
 

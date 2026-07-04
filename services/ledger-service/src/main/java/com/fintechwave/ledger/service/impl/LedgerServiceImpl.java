@@ -29,7 +29,10 @@ import com.fintechwave.core.observability.BusinessContextMdc;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -89,6 +92,8 @@ public class LedgerServiceImpl implements ILedgerService {
         try (var ctx = BusinessContextMdc.of(null, request.transactionId(), "LEDGER_COMMITTED")) {
             validateBalance(request);
 
+            List<Map<String, Object>> enrichedEntries = new ArrayList<>();
+
             for (DoubleEntryRequest.EntryLine line : request.entries()) {
                 // Skip if idempotency key already processed
                 if (ledgerEntryRepository.existsByIdempotencyKey(line.idempotencyKey())) {
@@ -128,29 +133,52 @@ public class LedgerServiceImpl implements ILedgerService {
                 balance.setAmount(newAmount);
                 balance.setUpdatedAt(Instant.now());
                 balanceRepository.save(balance);
+
+                Map<String, Object> enrichedLine = new HashMap<>();
+                enrichedLine.put("accountId", line.accountId().toString());
+                enrichedLine.put("accountCode", account.getAccountCode());
+                enrichedLine.put("accountType", account.getAccountType().name());
+
+                if (AccountCode.USER_WALLET.getCode().equals(account.getAccountCode())
+                        && account.getOwnerId() != null) {
+                    enrichedLine.put("ownerId", account.getOwnerId().toString());
+                }
+
+                enrichedLine.put("entryType", line.entryType());
+                enrichedLine.put("amount", line.amount());
+                enrichedLine.put("currency", line.currency());
+                enrichedLine.put("idempotencyKey", line.idempotencyKey().toString());
+                enrichedLine.put("description", line.description());
+                enrichedEntries.add(enrichedLine);
             }
 
-            try {
-                GenericDomainEvent domainEvent = new GenericDomainEvent(
-                        "LEDGER_COMMITTED",
-                        1,
-                        request.transactionId(),
-                        "LEDGER",
-                        request
-                );
-                String payloadJson = objectMapper.writeValueAsString(domainEvent);
-                outboxEventRepository.save(OutboxEvent.builder()
-                        .aggregateId(domainEvent.getAggregateId())
-                        .aggregateType(domainEvent.getAggregateType())
-                        .eventType(domainEvent.getEventType())
-                        .topic("ledger.transaction-results")
-                        .payload(payloadJson)
-                        .idempotencyKey(UUID.randomUUID())
-                        .published(false)
-                        .build());
-            } catch (Exception e) {
-                log.error("Failed to serialize outbox event for ledger commit: txId={}", request.transactionId(), e);
-                throw new RuntimeException("Outbox serialization failed", e);
+            if (!enrichedEntries.isEmpty()) {
+                try {
+                    java.util.Map<String, Object> enrichedPayload = new java.util.HashMap<>();
+                    enrichedPayload.put("transactionId", request.transactionId().toString());
+                    enrichedPayload.put("entries", enrichedEntries);
+
+                    GenericDomainEvent domainEvent = new GenericDomainEvent(
+                            "LEDGER_COMMITTED",
+                            1,
+                            request.transactionId(),
+                            "LEDGER",
+                            enrichedPayload);
+                    String payloadJson = objectMapper.writeValueAsString(domainEvent);
+                    outboxEventRepository.save(OutboxEvent.builder()
+                            .aggregateId(domainEvent.getAggregateId())
+                            .aggregateType(domainEvent.getAggregateType())
+                            .eventType(domainEvent.getEventType())
+                            .topic("ledger.transaction-results")
+                            .payload(payloadJson)
+                            .idempotencyKey(UUID.randomUUID())
+                            .published(false)
+                            .build());
+                } catch (Exception e) {
+                    log.error("Failed to serialize outbox event for ledger commit: txId={}", request.transactionId(),
+                            e);
+                    throw new RuntimeException("Outbox serialization failed", e);
+                }
             }
 
             log.info("Double-entry committed: transactionId={}", request.transactionId());
@@ -160,17 +188,19 @@ public class LedgerServiceImpl implements ILedgerService {
     @Override
     @Transactional
     @NewSpan("ledger.reserve")
-    public void reserve(@SpanTag("transaction.id") UUID transactionId, 
-                        @SpanTag("account.source") UUID sourceAccountId, 
-                        @SpanTag("amount") BigDecimal amount, 
-                        @SpanTag("currency") String currency) {
-        try (var ctx = BusinessContextMdc.of(null, transactionId, "LEDGER_RESERVE")) {
+    public void reserve(@SpanTag("transaction.id") UUID transactionId,
+            @SpanTag("account.source") UUID sourceAccountId,
+            @SpanTag("amount") BigDecimal amount,
+            @SpanTag("currency") String currency) {
+        try (var ctx = BusinessContextMdc.of(null, transactionId, sourceAccountId, "LEDGER_RESERVE")) {
             Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
             commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
-                    new DoubleEntryRequest.EntryLine(sourceAccountId, "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-reserve-debit").getBytes()),
+                    new DoubleEntryRequest.EntryLine(sourceAccountId, "DEBIT", amount, currency,
+                            UUID.nameUUIDFromBytes((transactionId.toString() + "-reserve-debit").getBytes()),
                             "RESERVE: lock funds"),
-                    new DoubleEntryRequest.EntryLine(suspense.getId(), "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-reserve-credit").getBytes()),
+                    new DoubleEntryRequest.EntryLine(suspense.getId(), "CREDIT", amount, currency,
+                            UUID.nameUUIDFromBytes((transactionId.toString() + "-reserve-credit").getBytes()),
                             "RESERVE: credit suspense"))));
 
             log.info("RESERVE: transactionId={} amount={} currency={}", transactionId, amount, currency);
@@ -180,17 +210,19 @@ public class LedgerServiceImpl implements ILedgerService {
     @Override
     @Transactional
     @NewSpan("ledger.commit")
-    public void commit(@SpanTag("transaction.id") UUID transactionId, 
-                       @SpanTag("account.destination") UUID destinationAccountId, 
-                       @SpanTag("amount") BigDecimal amount, 
-                       @SpanTag("currency") String currency) {
-        try (var ctx = BusinessContextMdc.of(null, transactionId, "LEDGER_COMMIT")) {
+    public void commit(@SpanTag("transaction.id") UUID transactionId,
+            @SpanTag("account.destination") UUID destinationAccountId,
+            @SpanTag("amount") BigDecimal amount,
+            @SpanTag("currency") String currency) {
+        try (var ctx = BusinessContextMdc.of(null, transactionId, destinationAccountId, "LEDGER_COMMIT")) {
             Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
             commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
-                    new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-commit-debit").getBytes()),
+                    new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency,
+                            UUID.nameUUIDFromBytes((transactionId.toString() + "-commit-debit").getBytes()),
                             "COMMIT: debit suspense"),
-                    new DoubleEntryRequest.EntryLine(destinationAccountId, "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-commit-credit").getBytes()),
+                    new DoubleEntryRequest.EntryLine(destinationAccountId, "CREDIT", amount, currency,
+                            UUID.nameUUIDFromBytes((transactionId.toString() + "-commit-credit").getBytes()),
                             "COMMIT: credit destination"))));
 
             log.info("COMMIT: transactionId={} amount={} currency={}", transactionId, amount, currency);
@@ -200,17 +232,19 @@ public class LedgerServiceImpl implements ILedgerService {
     @Override
     @Transactional
     @NewSpan("ledger.release")
-    public void release(@SpanTag("transaction.id") UUID transactionId, 
-                        @SpanTag("account.source") UUID sourceAccountId, 
-                        @SpanTag("amount") BigDecimal amount, 
-                        @SpanTag("currency") String currency) {
-        try (var ctx = BusinessContextMdc.of(null, transactionId, "LEDGER_RELEASE")) {
+    public void release(@SpanTag("transaction.id") UUID transactionId,
+            @SpanTag("account.source") UUID sourceAccountId,
+            @SpanTag("amount") BigDecimal amount,
+            @SpanTag("currency") String currency) {
+        try (var ctx = BusinessContextMdc.of(null, transactionId, sourceAccountId, "LEDGER_RELEASE")) {
             Account suspense = getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
 
             commitDoubleEntry(new DoubleEntryRequest(transactionId, List.of(
-                    new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-release-debit").getBytes()),
+                    new DoubleEntryRequest.EntryLine(suspense.getId(), "DEBIT", amount, currency,
+                            UUID.nameUUIDFromBytes((transactionId.toString() + "-release-debit").getBytes()),
                             "RELEASE: return from suspense"),
-                    new DoubleEntryRequest.EntryLine(sourceAccountId, "CREDIT", amount, currency, UUID.nameUUIDFromBytes((transactionId.toString() + "-release-credit").getBytes()),
+                    new DoubleEntryRequest.EntryLine(sourceAccountId, "CREDIT", amount, currency,
+                            UUID.nameUUIDFromBytes((transactionId.toString() + "-release-credit").getBytes()),
                             "RELEASE: credit back to source"))));
 
             log.info("RELEASE: transactionId={} amount={} currency={}", transactionId, amount, currency);
@@ -253,6 +287,60 @@ public class LedgerServiceImpl implements ILedgerService {
             }
 
             log.info("Reconciliation PASSED: balance={}", totalLiabilities);
+        }
+    }
+
+    @Override
+    @Transactional
+    public void simulateDivergence() {
+        try (var ctx = BusinessContextMdc.of(null, null, "LEDGER_SIMULATE_DIVERGENCE")) {
+            Account floatAccount = getOrCreatePlatformAccount(AccountCode.PLATFORM_FLOAT, "JOD");
+            Balance balance = balanceRepository.findByAccountId(floatAccount.getId())
+                    .orElseThrow(() -> new WalletNotFoundException(floatAccount.getId()));
+
+            balance.setAmount(balance.getAmount().add(new BigDecimal("2000.00")));
+            balance.setUpdatedAt(Instant.now());
+            balanceRepository.save(balance);
+
+            log.warn("SIMULATING DIVERGENCE: Platform float artificially inflated by $2,000.00");
+
+            try {
+                java.util.Map<String, Object> enrichedPayload = new java.util.HashMap<>();
+                enrichedPayload.put("transactionId", UUID.randomUUID().toString());
+
+                List<Map<String, Object>> fakeEntries = new ArrayList<>();
+                Map<String, Object> fakeEntry = new HashMap<>();
+                fakeEntry.put("accountId", floatAccount.getId().toString());
+                fakeEntry.put("accountCode", floatAccount.getAccountCode());
+                fakeEntry.put("accountType", floatAccount.getAccountType().name());
+                fakeEntry.put("entryType", "CREDIT");
+                fakeEntry.put("amount", new BigDecimal("2000.00"));
+                fakeEntry.put("currency", "USD");
+                fakeEntry.put("idempotencyKey", UUID.randomUUID().toString());
+                fakeEntry.put("description", "DIVERGENCE SIMULATION");
+                fakeEntries.add(fakeEntry);
+
+                enrichedPayload.put("entries", fakeEntries);
+
+                GenericDomainEvent domainEvent = new GenericDomainEvent(
+                        "LEDGER_COMMITTED",
+                        1,
+                        UUID.randomUUID(),
+                        "LEDGER",
+                        enrichedPayload);
+                String payloadJson = objectMapper.writeValueAsString(domainEvent);
+                outboxEventRepository.save(OutboxEvent.builder()
+                        .aggregateId(domainEvent.getAggregateId())
+                        .aggregateType(domainEvent.getAggregateType())
+                        .eventType(domainEvent.getEventType())
+                        .topic("ledger.transaction-results")
+                        .payload(payloadJson)
+                        .idempotencyKey(UUID.randomUUID())
+                        .published(false)
+                        .build());
+            } catch (Exception e) {
+                log.error("Failed to serialize outbox event for divergence simulation", e);
+            }
         }
     }
 

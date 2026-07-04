@@ -57,9 +57,29 @@ public class TransactionEventConsumer {
         UUID receiverId = UUID.fromString(payload.path("receiverId").asText());
         BigDecimal amount = new BigDecimal(payload.path("amount").asText());
         String currency = payload.path("currency").asText("USD");
+        BigDecimal feeAmount = new BigDecimal(payload.path("feeAmount").asText("0"));
 
         UUID receiverWalletId = ledgerService.getWalletBalance(receiverId).getAccountId();
         ledgerService.commit(transactionId, receiverWalletId, amount, currency);
+        
+        if (feeAmount.compareTo(BigDecimal.ZERO) > 0) {
+            Account suspense = ledgerService.getOrCreatePlatformAccount(AccountCode.SUSPENSE, currency);
+            Account feeRevenue = ledgerService.getOrCreatePlatformAccount(AccountCode.P2P_FEE_REVENUE, currency);
+
+            ledgerService.commitDoubleEntry(new DoubleEntryRequest(
+                    transactionId,
+                    List.of(
+                            new DoubleEntryRequest.EntryLine(
+                                    suspense.getId(), "DEBIT", feeAmount, currency,
+                                    ikey(transactionId, "p2p-fee-debit-suspense"),
+                                    "P2P: debit suspense for fee recognition"),
+                            new DoubleEntryRequest.EntryLine(
+                                    feeRevenue.getId(), "CREDIT", feeAmount, currency,
+                                    ikey(transactionId, "p2p-fee-credit-revenue"),
+                                    "P2P: credit fee revenue"))));
+            log.info("P2P TRANSFER_COMPLETED: fee recognised txId={} fee={} {}", transactionId, feeAmount, currency);
+        }
+        
         log.info("Ledger committed funds for P2P txId={}", transactionId);
     }
 

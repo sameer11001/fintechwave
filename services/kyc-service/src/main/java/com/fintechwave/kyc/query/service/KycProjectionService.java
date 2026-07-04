@@ -3,10 +3,15 @@ package com.fintechwave.kyc.query.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fintechwave.kyc.domain.enums.KycStatus;
 import com.fintechwave.kyc.domain.enums.KycTier;
+import com.fintechwave.kyc.dto.response.AdminKycApplicationResponse;
 import com.fintechwave.kyc.dto.response.KycApplicationResponse;
+import com.fintechwave.kyc.dto.response.KycDocumentResponse;
+import com.fintechwave.kyc.domain.enums.DocumentType;
 import com.fintechwave.kyc.exception.KycApplicationNotFoundException;
 import com.fintechwave.kyc.query.entity.KycApplicationView;
+import com.fintechwave.kyc.query.entity.KycDocumentView;
 import com.fintechwave.kyc.query.repository.KycApplicationViewRepository;
+import com.fintechwave.kyc.storage.IDocumentStorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -15,6 +20,8 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -25,9 +32,17 @@ public class KycProjectionService {
     private final KycApplicationViewRepository repository;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    /**
+     * Used only at query time to generate pre-signed URLs on the fly
+     * from the bucket + key already embedded in the document view.
+     * No secondary DB fetch — the metadata is already in MongoDB.
+     */
+    private final IDocumentStorageService storageService;
 
     private static final String CACHE_PREFIX = "fintechwave:kyc-service:app:";
     private static final Duration CACHE_TTL = Duration.ofMinutes(10);
+
+    // ─── Query methods ────────────────────────────────────────────────────────
 
     public KycApplicationResponse getMyApplication(UUID userId) {
         String cacheKey = CACHE_PREFIX + userId;
@@ -59,10 +74,49 @@ public class KycProjectionService {
         return repository.findByStatus(status, pageable).map(this::mapToResponse);
     }
 
-    public KycApplicationResponse getApplicationById(UUID applicationId) {
+    public List<KycDocumentResponse> getMyDocumentsFromView(UUID userId) {
+        KycApplicationView view = repository.findByUserId(userId)
+                .orElseThrow(
+                        () -> new KycApplicationNotFoundException("KYC Application not found for user: " + userId));
+
+        return view.getDocuments().stream()
+                .map(docView -> KycDocumentResponse.builder()
+                        .id(docView.id())
+                        .documentType(DocumentType.valueOf(docView.documentType()))
+                        .contentType(docView.contentType())
+                        .fileSizeBytes(docView.fileSizeBytes())
+                        .uploadedAt(docView.uploadedAt())
+                        .downloadUrl(storageService.generatePresignedUrl(
+                                docView.storageBucket(), docView.storageKey()))
+                        .build())
+                .toList();
+    }
+
+    public AdminKycApplicationResponse getAdminApplicationById(UUID applicationId) {
         KycApplicationView view = repository.findById(applicationId)
                 .orElseThrow(() -> new KycApplicationNotFoundException("KYC Application not found: " + applicationId));
-        return mapToResponse(view);
+
+        return AdminKycApplicationResponse.builder()
+                .id(view.getId())
+                .userId(view.getUserId())
+                .status(KycStatus.valueOf(view.getStatus()))
+                .currentTier(KycTier.valueOf(view.getCurrentTier()))
+                .requestedTier(view.getRequestedTier() != null ? KycTier.valueOf(view.getRequestedTier()) : null)
+                .rejectionReason(view.getRejectionReason())
+                .createdAt(view.getCreatedAt())
+                .updatedAt(view.getUpdatedAt())
+                .documents(view.getDocuments().stream()
+                        .map(docView -> KycDocumentResponse.builder()
+                                .id(docView.id())
+                                .documentType(DocumentType.valueOf(docView.documentType()))
+                                .contentType(docView.contentType())
+                                .fileSizeBytes(docView.fileSizeBytes())
+                                .uploadedAt(docView.uploadedAt())
+                                .downloadUrl(storageService.generatePresignedUrl(
+                                        docView.storageBucket(), docView.storageKey()))
+                                .build())
+                        .toList())
+                .build();
     }
 
     public void handleKycCreated(UUID id, UUID userId, String status, String currentTier, String requestedTier) {
@@ -71,8 +125,8 @@ public class KycProjectionService {
         view.setStatus(status);
         view.setCurrentTier(currentTier);
         view.setRequestedTier(requestedTier);
-        view.setCreatedAt(java.time.Instant.now());
-        view.setUpdatedAt(java.time.Instant.now());
+        view.setCreatedAt(Instant.now());
+        view.setUpdatedAt(Instant.now());
         repository.save(view);
         cacheView(view);
         log.info("Projected KYC_CREATED for appId={} userId={}", id, userId);
@@ -87,9 +141,9 @@ public class KycProjectionService {
         view.setRequestedTier(requestedTier);
         view.setRejectionReason(null);
         if (view.getCreatedAt() == null) {
-            view.setCreatedAt(java.time.Instant.now());
+            view.setCreatedAt(Instant.now());
         }
-        view.setUpdatedAt(java.time.Instant.now());
+        view.setUpdatedAt(Instant.now());
         repository.save(view);
         cacheView(view);
         log.info("Projected KYC_SUBMITTED for appId={}", id);
@@ -103,9 +157,9 @@ public class KycProjectionService {
         view.setStatus(status);
         view.setCurrentTier(currentTier);
         if (view.getCreatedAt() == null) {
-            view.setCreatedAt(java.time.Instant.now());
+            view.setCreatedAt(Instant.now());
         }
-        view.setUpdatedAt(java.time.Instant.now());
+        view.setUpdatedAt(Instant.now());
         repository.save(view);
         cacheView(view);
         log.info("Projected KYC_VERIFIED for appId={}", id);
@@ -119,12 +173,23 @@ public class KycProjectionService {
         view.setStatus(status);
         view.setRejectionReason(rejectionReason);
         if (view.getCreatedAt() == null) {
-            view.setCreatedAt(java.time.Instant.now());
+            view.setCreatedAt(Instant.now());
         }
-        view.setUpdatedAt(java.time.Instant.now());
+        view.setUpdatedAt(Instant.now());
         repository.save(view);
         cacheView(view);
         log.info("Projected KYC_REJECTED for appId={}", id);
+    }
+
+    public void handleDocumentUploaded(UUID applicationId, KycDocumentView documentView) {
+        KycApplicationView view = repository.findById(applicationId)
+                .orElseThrow(() -> new KycApplicationNotFoundException(
+                        "Cannot project document — KYC Application not found: " + applicationId));
+        view.getDocuments().add(documentView);
+        view.setUpdatedAt(Instant.now());
+        repository.save(view);
+        cacheView(view);
+        log.info("Projected DOCUMENT_UPLOADED into appId={} docId={}", applicationId, documentView.id());
     }
 
     private void cacheView(KycApplicationView view) {

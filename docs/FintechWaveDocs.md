@@ -219,6 +219,7 @@ User → Keycloak (authenticate) → JWT (RS256)
 | Reporting        | **reporting-service**                      | ✅ Done — Phase 3 | 8087        |
 | API Gateway      | **gateway**                                | ✅ Done — Phase 1 | 8080        |
 | Config Server    | **config-server**                          | ✅ Done — Phase 1 | 8888        |
+| Admin Portal     | **fintechwave-admin-portal** (Angular)     | ✅ Done — Phase 6 | 4200        |
 | Merchant         | Future                                     | —                 | TBD         |
 | Settlement       | Deferred                                   | —                 | TBD         |
 
@@ -635,6 +636,8 @@ com.fintechwave.reporting/
 - ✅ **Kafka Dead-Letter Queue (DLQ) & Resiliency** (exponential backoff, poison-pill protection, DLT compensation flows)
 - ✅ **Centralized Context Propagation** (traceId, spanId, userId/keycloakId context propagation using MDC in `BusinessContextMdc`)
 - ✅ **Unified Observability Stack** (integrated Loki, Tempo, Prometheus, Alertmanager, Otel-Collector, and Grafana in Docker Compose)
+- ✅ **Double-Entry Reporting Ledger & Reconciliation Engine** (reporting-service trial balance reports and divergence tracking)
+- ✅ **Frontend Architecture Resilience** (Angular admin portal resilient retry interceptors and event-driven updates)
 - Kubernetes manifests (`infra/`) — Deployments, Services, HPAs, Secrets
 - KEDA autoscaling (CPU, Kafka consumer lag, request rate triggers)
 - Pact contract tests for all Feign clients
@@ -673,6 +676,19 @@ Distributed events are secured with robust error recovery patterns:
 - **Observability Pipeline**: Trace, log, and metric streams are routed through the OpenTelemetry Collector to Loki, Tempo, and Prometheus, visualizing end-to-end request flows in Grafana.
 - **Alerting Rules**: Defined business alerts in `alerts.yml` for SLA tracking, covering high transaction failure rates (>1%), virtual thread pinning (`tracePinnedThreads`), and critical DLQ volumes.
 
+### Phase 5 — System Resilience & Fault Tolerance 🔲
+
+Based on the [System Resilience Audit & Implementation Plan](System_Resilience.md), the following gaps are being addressed to harden the platform for production:
+- **Phase 1 (Critical):** Kafka DLT across all consumers, compensation logic for stuck transactions, per-service circuit breaker configs in the API Gateway.
+- **Phase 2 (Important):** Kafka idempotency guards for read-model consumers, circuit breaker metrics & alerts, rate limiting on KYC routes.
+- **Phase 3 (Advanced):** Service-level Bulkheads, Chaos engineering fault injection, DB connection pool limits.
+
+### Phase 6 — Frontend Admin Portal 🔲
+
+The platform administration interface (`fintechwave-admin-portal`) is built in Angular, operating on port 4200. It connects to the API Gateway to monitor the overall health and operations of the platform.
+- **Ledger & Reconciliation Dashboard**: Visualize the double-entry accounting state, trial balances, and system divergence warnings.
+- **Robust UI Error Handling**: Handles CQRS latency via optimistic updates, and manages 503/504 gateway failures with unified interceptors and retry fallbacks.
+
 ---
 
 ## 11. Infrastructure Map
@@ -684,6 +700,7 @@ Distributed events are secured with robust error recovery patterns:
 | Keycloak             | 8180 → 8080         | KRaft mode, no Zookeeper dependency |
 | Config Server        | 8888                |                                     |
 | API Gateway          | 8080                |                                     |
+| Admin Portal         | 4200                | Angular Administration UI           |
 | user-service         | 8081                | Uses MongoDB/Redis for read-models  |
 | kyc-service          | 8082                | MinIO bucket: `kyc-documents`       |
 | ledger-service       | 8083                | Double-entry core                   |

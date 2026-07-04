@@ -17,7 +17,6 @@ import com.fintechwave.transaction.dto.request.InitiateTransferRequest;
 import com.fintechwave.transaction.dto.response.TransactionResponse;
 import com.fintechwave.transaction.exception.DuplicateTransactionException;
 import com.fintechwave.transaction.exception.InvalidTransactionStateException;
-import com.fintechwave.transaction.exception.TransactionNotFoundException;
 import com.fintechwave.transaction.repository.OutboxEventRepository;
 import com.fintechwave.transaction.repository.TransactionRepository;
 import com.fintechwave.transaction.service.IFeeService;
@@ -26,8 +25,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 import org.slf4j.MDC;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,10 +35,15 @@ import java.util.UUID;
 import com.fintechwave.core.observability.BusinessContextMdc;
 import com.fintechwave.events.GenericDomainEvent;
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import io.opentelemetry.api.trace.Span;
 import jakarta.annotation.PostConstruct;
+import org.springframework.scheduling.annotation.Scheduled;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -57,25 +59,10 @@ public class TransactionServiceImpl implements ITransactionService {
     private final LedgerGrpcClient ledgerGrpcClient;
     private final MeterRegistry meterRegistry;
 
-    private Counter txInitiatedCounter;
-    private Counter txFailedCounter;
-    private Counter stripeWebhookCounter;
     private Timer p2pTransferTimer;
 
     @PostConstruct
     void initMetrics() {
-        this.txInitiatedCounter = Counter.builder("fintechwave.transaction.initiated")
-                .description("Transactions successfully initiated, by type")
-                .register(meterRegistry);
-
-        this.txFailedCounter = Counter.builder("fintechwave.transaction.failed")
-                .description("Transaction failures, by type and reason")
-                .register(meterRegistry);
-
-        this.stripeWebhookCounter = Counter.builder("fintechwave.stripe.webhook.received")
-                .description("Stripe webhook events received, by type and outcome")
-                .register(meterRegistry);
-
         this.p2pTransferTimer = Timer.builder("fintechwave.p2p.transfer.duration")
                 .description("End-to-end duration of P2P transfer initiation")
                 .register(meterRegistry);
@@ -384,25 +371,6 @@ public class TransactionServiceImpl implements ITransactionService {
     }
 
     @Override
-    public Page<TransactionResponse> getMyTransactions(UUID userId, Pageable pageable) {
-        return transactionRepository.findBySenderIdOrReceiverId(userId, userId, pageable)
-                .map(TransactionResponse::from);
-    }
-
-    @Override
-    public TransactionResponse getTransactionById(UUID transactionId, UUID callerId) {
-        TransactionRecord tx = transactionRepository.findById(transactionId)
-                .orElseThrow(() -> new TransactionNotFoundException(transactionId));
-
-        if (!tx.getSenderId().equals(callerId) &&
-                (tx.getReceiverId() == null || !tx.getReceiverId().equals(callerId))) {
-            throw new TransactionNotFoundException(transactionId); // 404 not 403 (avoid info leak)
-        }
-
-        return TransactionResponse.from(tx);
-    }
-
-    @Override
     @Transactional
     public void handleFraudDecision(UUID transactionId, boolean approved) {
         TransactionRecord tx = transactionRepository.findById(transactionId).orElse(null);
@@ -427,6 +395,7 @@ public class TransactionServiceImpl implements ITransactionService {
                                 "senderId", tx.getSenderId().toString(),
                                 "receiverId", tx.getReceiverId().toString(),
                                 "amount", tx.getAmount().toPlainString(),
+                                "feeAmount", tx.getFeeAmount().toPlainString(),
                                 "currency", tx.getCurrency()));
                 log.info("P2P transfer approved by fraud, completing: txId={}", tx.getId());
             } else {
@@ -491,5 +460,15 @@ public class TransactionServiceImpl implements ITransactionService {
             log.error("Failed to serialize outbox event: eventType={}", eventType, e);
             throw new RuntimeException("Outbox serialization failed", e);
         }
+    }
+
+    @Scheduled(fixedDelay = 300_000)
+    public void recordStuckTransactions() {
+        long count = transactionRepository.countByStatusInAndCreatedAtBefore(
+                List.of(TransactionStatus.INITIATED, TransactionStatus.RESERVED),
+                Instant.now().minus(10, ChronoUnit.MINUTES));
+        Gauge.builder("fintechwave.transaction.stuck", () -> count)
+                .description("Transactions stuck in INITIATED/RESERVED > 10m")
+                .register(meterRegistry);
     }
 }

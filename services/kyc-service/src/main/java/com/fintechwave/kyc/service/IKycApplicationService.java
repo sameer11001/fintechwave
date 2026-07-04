@@ -9,7 +9,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -54,14 +53,6 @@ public interface IKycApplicationService {
      */
     KycDocumentResponse uploadDocument(UUID userId, DocumentType documentType, MultipartFile file);
 
-    /**
-     * Returns all documents for the calling user's KYC application.
-     * Pre-signed URLs are generated on request.
-     *
-     * @param userId Calling user's Keycloak ID
-     */
-    List<KycDocumentResponse> getMyDocuments(UUID userId);
-
     // ─── Admin operations ─────────────────────────────────────────────────────
 
     /**
@@ -70,7 +61,8 @@ public interface IKycApplicationService {
     Page<KycApplicationResponse> listApplications(String status, Pageable pageable);
 
     /**
-     * Full application detail for admin review, including documents with pre-signed URLs.
+     * Full application detail for admin review, including documents with pre-signed
+     * URLs.
      *
      * @param applicationId KYC application ID
      */
@@ -79,7 +71,7 @@ public interface IKycApplicationService {
     /**
      * Admin approves or rejects a KYC application.
      * On APPROVED: transitions to VERIFIED, publishes KYCVerified event.
-     * On REJECTED:  transitions to REJECTED, publishes KYCRejected event.
+     * On REJECTED: transitions to REJECTED, publishes KYCRejected event.
      *
      * COMPLIANCE GATE: KYCVerified is the only trigger for wallet provisioning.
      *

@@ -7,7 +7,6 @@ import com.fintechwave.ledger.service.ILedgerService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -30,14 +29,22 @@ public class LedgerController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
-    @PostMapping("/wallets/{userId}")
-    @Operation(summary = "Provision a wallet for a user (internal — called after KYCVerified)")
-    @PreAuthorize("hasAuthority('SCOPE_internal')")
-    public ResponseEntity<ApiResponse<WalletResponse>> provisionWallet(
-            @PathVariable UUID userId,
-            @RequestParam(defaultValue = "JOD") String currency) {
-
-        WalletResponse response = ledgerService.provisionWallet(userId, currency);
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success(response));
+    @PostMapping("/reconcile")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Force authoritative MongoDB reconciliation check")
+    public ResponseEntity<ApiResponse<String>> reconcile() {
+        ledgerService.reconcile();
+        return ResponseEntity
+                .ok(ApiResponse.success("Reconciliation PASSED. Asset Float matches User Liabilities perfectly."));
     }
+
+    @PostMapping("/simulate-divergence")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Simulate a ledger balance divergence for testing")
+    public ResponseEntity<ApiResponse<String>> simulateDivergence() {
+        ledgerService.simulateDivergence();
+        return ResponseEntity.ok(ApiResponse
+                .success("Divergence simulated. An artificial $2,000 credit was added to the Platform Float."));
+    }
+
 }

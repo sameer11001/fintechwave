@@ -9,6 +9,8 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 @Document(collection = "kyc_applications")
@@ -31,4 +33,7 @@ public class KycApplicationView {
 
     private Instant createdAt;
     private Instant updatedAt;
+
+    @Builder.Default
+    private List<KycDocumentView> documents = new ArrayList<>();
 }

@@ -1,6 +1,7 @@
 package com.fintechwave.kyc.api;
 
 import com.fintechwave.kyc.dto.request.AdminReviewRequest;
+import com.fintechwave.kyc.dto.response.AdminKycApplicationResponse;
 import com.fintechwave.kyc.dto.response.KycApplicationResponse;
 import com.fintechwave.kyc.query.service.KycProjectionService;
 import com.fintechwave.kyc.service.IKycApplicationService;
@@ -17,11 +18,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
 
-/**
- * Admin KYC management controller.
- * All endpoints require ROLE_ADMIN (enforced at filter chain + method
- * security).
- */
 @RestController
 @RequestMapping("/api/v1/admin/kyc")
 @RequiredArgsConstructor
@@ -40,9 +36,9 @@ public class AdminKycController {
     }
 
     @GetMapping("/applications/{applicationId}")
-    public ResponseEntity<KycApplicationResponse> getApplication(
+    public ResponseEntity<AdminKycApplicationResponse> getApplication(
             @PathVariable("applicationId") UUID applicationId) {
-        return ResponseEntity.ok(queryService.getApplicationById(applicationId));
+        return ResponseEntity.ok(queryService.getAdminApplicationById(applicationId));
     }
 
     @PostMapping("/applications/{applicationId}/review")

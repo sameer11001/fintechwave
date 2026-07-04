@@ -8,18 +8,15 @@ import java.util.UUID;
 
 public interface IUserProfileService {
 
-    /** Called by the Keycloak webhook — creates the profile and publishes UserRegistered to Outbox. */
     void createProfileFromKeycloak(KeycloakUserEventRequest request);
-
-    UserProfileResponse findByKeycloakId(UUID keycloakId);
-
-    UserProfileResponse findById(UUID userId);
 
     UserProfileResponse updateProfile(UUID keycloakId, UpdateUserProfileRequest request);
 
-    /** Called by kyc-service after KYCVerified — upgrades the user's KYC tier. */
     void updateKycTier(UUID keycloakId, String tier);
 
-    /** Called by transaction-service on first cash-in — stores Stripe customer reference. */
+    /**
+     * Called by transaction-service on first cash-in — stores Stripe customer
+     * reference.
+     */
     void updateStripeCustomerId(UUID keycloakId, String stripeCustomerId);
 }

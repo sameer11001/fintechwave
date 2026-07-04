@@ -9,15 +9,22 @@ public final class BusinessContextMdc implements AutoCloseable {
     private static final String USER_ID = "user_id";
     private static final String TRANSACTION_ID = "transaction_id";
     private static final String EVENT_TYPE = "event_type";
+    private static final String ACCOUNT_ID = "account_id";
 
     private BusinessContextMdc() {
     }
 
     public static BusinessContextMdc of(UUID userId, UUID transactionId, String eventType) {
+        return of(userId, transactionId, null, eventType);
+    }
+
+    public static BusinessContextMdc of(UUID userId, UUID transactionId, UUID accountId, String eventType) {
         if (userId != null)
             MDC.put(USER_ID, userId.toString());
         if (transactionId != null)
             MDC.put(TRANSACTION_ID, transactionId.toString());
+        if (accountId != null)
+            MDC.put(ACCOUNT_ID, accountId.toString());
         if (eventType != null)
             MDC.put(EVENT_TYPE, eventType);
         return new BusinessContextMdc();
@@ -28,5 +35,6 @@ public final class BusinessContextMdc implements AutoCloseable {
         MDC.remove(USER_ID);
         MDC.remove(TRANSACTION_ID);
         MDC.remove(EVENT_TYPE);
+        MDC.remove(ACCOUNT_ID);
     }
 }

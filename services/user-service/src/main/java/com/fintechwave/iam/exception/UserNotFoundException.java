@@ -13,4 +13,12 @@ public class UserNotFoundException extends ResourceNotFoundException {
     public UserNotFoundException(String email) {
         super("User profile not found for email: " + email);
     }
+
+    public UserNotFoundException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    public static UserNotFoundException withMessage(String message) {
+        return new UserNotFoundException(message, null);
+    }
 }

@@ -8,6 +8,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.time.Instant;
+import java.util.List;
+import com.fintechwave.transaction.domain.enums.TransactionStatus;
 
 public interface TransactionRepository extends JpaRepository<TransactionRecord, UUID> {
 
@@ -30,4 +33,6 @@ public interface TransactionRepository extends JpaRepository<TransactionRecord, 
      * Requires a DB index on stripe_payout_id.
      */
     Optional<TransactionRecord> findByStripePayoutId(String stripePayoutId);
+
+    long countByStatusInAndCreatedAtBefore(List<TransactionStatus> statuses, Instant createdAt);
 }

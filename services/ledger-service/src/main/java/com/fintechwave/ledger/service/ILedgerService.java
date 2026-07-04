@@ -53,6 +53,12 @@ public interface ILedgerService {
      */
     void reconcile();
 
+    /**
+     * Admin-only: injects a single-sided ledger entry to simulate a divergence
+     * between platform float and user liabilities for testing the alerting system.
+     */
+    void simulateDivergence();
+
     /** Finds or creates the platform account for the given code (idempotent). */
     Account getOrCreatePlatformAccount(AccountCode code, String currency);
 }

@@ -1,10 +1,9 @@
-package com.fintechwave.fraud.config;
+package com.fintechwave.reporting.config;
 
 import com.fasterxml.jackson.core.JsonParseException;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -12,6 +11,7 @@ import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.util.backoff.ExponentialBackOff;
 
 @Configuration(proxyBeanMethods = false)
@@ -31,7 +31,6 @@ public class KafkaConsumerConfig {
         backOff.setMaxAttempts(3);
 
         DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
-
         handler.addNotRetryableExceptions(
                 IllegalArgumentException.class,
                 JsonParseException.class);
@@ -50,11 +49,13 @@ public class KafkaConsumerConfig {
         factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
 
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setThreadNamePrefix("kafka-fraud-");
-        executor.setCorePoolSize(5);
-        executor.setMaxPoolSize(10);
-        executor.setQueueCapacity(25);
+        executor.setThreadNamePrefix("kafka-reporting-");
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(8);
+        executor.setQueueCapacity(20);
+        executor.setVirtualThreads(false); // explicit: must be platform threads
         executor.initialize();
+
         factory.getContainerProperties().setListenerTaskExecutor(executor);
 
         return factory;

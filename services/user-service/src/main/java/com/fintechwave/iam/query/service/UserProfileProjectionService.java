@@ -8,6 +8,8 @@ import com.fintechwave.iam.query.repository.UserProfileViewRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -26,7 +28,8 @@ public class UserProfileProjectionService {
     private static final String CACHE_PREFIX = "fintechwave:user-service:user:";
     private static final Duration CACHE_TTL = Duration.ofMinutes(10);
 
-    public void handleUserRegistered(UUID userId, String email, String firstName, String lastName, UUID keycloakId, String status) {
+    public void handleUserRegistered(UUID userId, String email, String firstName, String lastName, UUID keycloakId,
+            String status) {
         UserProfileView view = UserProfileView.builder()
                 .id(userId)
                 .keycloakId(keycloakId)
@@ -38,7 +41,7 @@ public class UserProfileProjectionService {
                 .createdAt(java.time.Instant.now())
                 .updatedAt(java.time.Instant.now())
                 .build();
-        
+
         repository.save(view);
         cacheView(view);
         log.info("Projected UserRegistered for userId={}", userId);
@@ -54,18 +57,22 @@ public class UserProfileProjectionService {
         });
     }
 
-    public Optional<UserProfileView> getUserProfile(UUID userId) {
-        String cacheKey = CACHE_PREFIX + userId;
+    public Optional<UserProfileView> getUserProfile(UUID idOrKeycloakId) {
+        String cacheKey = CACHE_PREFIX + idOrKeycloakId;
         try {
             String cached = redisTemplate.opsForValue().get(cacheKey);
             if (cached != null) {
                 return Optional.of(objectMapper.readValue(cached, UserProfileView.class));
             }
         } catch (Exception e) {
-            log.warn("Failed to read from cache for userId={}", userId, e);
+            log.warn("Failed to read from cache for id={}", idOrKeycloakId, e);
         }
 
-        Optional<UserProfileView> viewOpt = repository.findById(userId);
+        Optional<UserProfileView> viewOpt = repository.findById(idOrKeycloakId);
+        if (viewOpt.isEmpty()) {
+            viewOpt = repository.findByKeycloakId(idOrKeycloakId);
+        }
+        
         viewOpt.ifPresent(this::cacheView);
         return viewOpt;
     }
@@ -82,7 +89,7 @@ public class UserProfileProjectionService {
 
     public UserProfileResponse getUserProfileResponse(UUID userId) {
         UserProfileView view = getUserProfile(userId)
-                .orElseThrow(() -> new UserNotFoundException("User profile not found in read model for ID: " + userId));
+                .orElseThrow(() -> UserNotFoundException.withMessage("User profile not found in read model for ID: " + userId));
         return mapToResponse(view);
     }
 
@@ -99,8 +106,9 @@ public class UserProfileProjectionService {
         }
 
         UserProfileView view = repository.findByKeycloakId(keycloakId)
-                .orElseThrow(() -> new UserNotFoundException("User profile not found in read model for Keycloak ID: " + keycloakId));
-        
+                .orElseThrow(() -> new UserNotFoundException(
+                        "User profile not found in read model for Keycloak ID: " + keycloakId));
+
         cacheView(view);
         try {
             String json = objectMapper.writeValueAsString(view);
@@ -108,8 +116,13 @@ public class UserProfileProjectionService {
         } catch (Exception e) {
             log.error("Failed to cache UserProfileView for keycloakId={}", keycloakId, e);
         }
-        
+
         return mapToResponse(view);
+    }
+
+    public Page<UserProfileResponse> getAllUserProfileResponses(Pageable pageable) {
+        return repository.findAll(pageable)
+                .map(this::mapToResponse);
     }
 
     private UserProfileResponse mapToResponse(UserProfileView view) {

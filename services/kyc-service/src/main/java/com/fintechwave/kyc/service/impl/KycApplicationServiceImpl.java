@@ -11,6 +11,8 @@ import com.fintechwave.kyc.dto.response.KycApplicationResponse;
 import com.fintechwave.kyc.dto.response.KycDocumentResponse;
 import com.fintechwave.kyc.exception.InvalidKycStateTransitionException;
 import com.fintechwave.kyc.exception.KycApplicationNotFoundException;
+import com.fintechwave.kyc.query.entity.KycDocumentView;
+import com.fintechwave.kyc.query.service.KycProjectionService;
 import com.fintechwave.kyc.repository.*;
 import com.fintechwave.kyc.service.IKycApplicationService;
 import com.fintechwave.kyc.storage.IDocumentStorageService;
@@ -23,10 +25,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 import com.fintechwave.events.GenericDomainEvent;
 import com.fintechwave.core.observability.BusinessContextMdc;
 
@@ -41,6 +41,7 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
     private final OutboxEventRepository outboxEventRepository;
     private final IDocumentStorageService storageService;
     private final ObjectMapper objectMapper;
+    private final KycProjectionService projectionService;
 
     @Override
     @Transactional
@@ -94,7 +95,8 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
                     Map.of("userId", userId.toString(),
                             "requestedTier", request.requestedTier().name()));
 
-            log.info("KYC application submitted: applicationId={} requestedTier={}", app.getId(), request.requestedTier());
+            log.info("KYC application submitted: applicationId={} requestedTier={}", app.getId(),
+                    request.requestedTier());
             return KycApplicationResponse.from(app);
         }
     }
@@ -115,11 +117,13 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
             String contentType = file.getContentType();
             if (contentType == null || contentType.isBlank()) {
                 contentType = "application/octet-stream";
-                log.warn("Content-Type not provided for document upload: applicationId={} documentType={} — defaulting to application/octet-stream",
+                log.warn(
+                        "Content-Type not provided for document upload: applicationId={} documentType={} — defaulting to application/octet-stream",
                         app.getId(), documentType);
             }
 
-            IDocumentStorageService.StorageReference ref = storageService.upload(app.getId(), userId, documentType.name(),
+            IDocumentStorageService.StorageReference ref = storageService.upload(app.getId(), userId,
+                    documentType.name(),
                     file);
 
             KycDocument document = KycDocument.builder()
@@ -132,20 +136,18 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
                     .build();
             documentRepository.save(document);
 
+            projectionService.handleDocumentUploaded(app.getId(), new KycDocumentView(
+                    document.getId(),
+                    documentType.name(),
+                    ref.bucket(),
+                    ref.objectKey(),
+                    contentType,
+                    file.getSize(),
+                    document.getUploadedAt()));
+
             log.info("Document saved: applicationId={} documentType={}", app.getId(), documentType);
             return KycDocumentResponse.from(document);
         }
-    }
-
-    @Override
-    public List<KycDocumentResponse> getMyDocuments(UUID userId) {
-        KycApplication app = findByUserId(userId);
-        return documentRepository.findAllByApplicationId(app.getId()).stream()
-                .map(doc -> {
-                    String url = storageService.generatePresignedUrl(doc.getStorageBucket(), doc.getStorageKey());
-                    return KycDocumentResponse.from(doc, url);
-                })
-                .collect(Collectors.toList());
     }
 
     @Override
@@ -237,8 +239,7 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
                     version,
                     aggregateId,
                     aggregateType,
-                    payload
-            );
+                    payload);
 
             String payloadJson = objectMapper.writeValueAsString(domainEvent);
             OutboxEvent outbox = OutboxEvent.builder()

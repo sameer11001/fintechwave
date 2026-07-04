@@ -6,6 +6,7 @@ import com.fintechwave.reporting.service.SearchIndexingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -19,7 +20,7 @@ import java.util.UUID;
 public class UserEventConsumer {
 
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final StringRedisTemplate redisTemplate;
     private final SearchIndexingService searchIndexingService;
 
     @KafkaListener(topics = "iam.user-events", groupId = "reporting-service-users", containerFactory = "kafkaListenerContainerFactory")
@@ -51,6 +52,17 @@ public class UserEventConsumer {
                 String status = payload.path("status").asText("ACTIVE");
 
                 searchIndexingService.indexUserRegistration(userId, keycloakId, email, firstName, lastName, status);
+
+                if ("ACTIVE".equals(status)) {
+                    redisTemplate.opsForValue().increment("reporting:active_users_count");
+                }
+            } else if ("USER_STATUS_CHANGED".equals(eventType)) {
+                String newStatus = payload.path("status").asText();
+                if ("SUSPENDED".equals(newStatus) || "DEACTIVATED".equals(newStatus)) {
+                    redisTemplate.opsForValue().decrement("reporting:active_users_count");
+                } else if ("ACTIVE".equals(newStatus)) {
+                    redisTemplate.opsForValue().increment("reporting:active_users_count");
+                }
             } else {
                 log.debug("Ignoring eventType={} for search indexing", eventType);
             }

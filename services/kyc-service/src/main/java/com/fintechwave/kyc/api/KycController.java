@@ -66,6 +66,6 @@ public class KycController {
     public ResponseEntity<List<KycDocumentResponse>> getMyDocuments(
             @AuthenticationPrincipal Jwt jwt) {
         UUID userId = UUID.fromString(jwt.getSubject());
-        return ResponseEntity.ok(kycService.getMyDocuments(userId));
+        return ResponseEntity.ok(queryService.getMyDocumentsFromView(userId));
     }
 }

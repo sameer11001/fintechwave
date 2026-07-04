@@ -1,9 +1,9 @@
 package com.fintechwave.kyc.storage;
 
+import com.fintechwave.kyc.config.MinioProperties;
 import com.fintechwave.kyc.exception.DocumentStorageException;
 import io.minio.*;
 import io.minio.http.Method;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -12,7 +12,6 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class MinioStorageService implements IDocumentStorageService {
 
@@ -20,13 +19,27 @@ public class MinioStorageService implements IDocumentStorageService {
     private static final int PRESIGNED_URL_EXPIRY_MINUTES = 15;
 
     private final MinioClient minioClient;
+    private final MinioClient presignedMinioClient;
+
+    public MinioStorageService(MinioClient minioClient, MinioProperties minioProperties) {
+        this.minioClient = minioClient;
+
+        String extEndpoint = minioProperties.getExternalEndpoint();
+        if (extEndpoint == null || extEndpoint.isEmpty()) {
+            extEndpoint = "http://localhost:9000";
+        }
+
+        this.presignedMinioClient = MinioClient.builder()
+                .endpoint(extEndpoint)
+                .credentials(minioProperties.getAccessKey(), minioProperties.getSecretKey())
+                .region("us-east-1")
+                .build();
+    }
 
     @Override
     public StorageReference upload(UUID applicationId, UUID userId, String documentType, MultipartFile file) {
         ensureBucketExists(KYC_BUCKET);
 
-        // Format: {userId}/{applicationId}/{documentType}/{uuid}
-        // No original file name stored — avoids PII leakage via object keys in logs
         String extension = extractExtension(file.getOriginalFilename());
         String objectKey = userId + "/" + applicationId + "/" + documentType.toLowerCase()
                 + "/" + UUID.randomUUID() + extension;
@@ -53,12 +66,13 @@ public class MinioStorageService implements IDocumentStorageService {
     @Override
     public String generatePresignedUrl(String bucket, String objectKey) {
         try {
-            return minioClient.getPresignedObjectUrl(
+            return presignedMinioClient.getPresignedObjectUrl(
                     GetPresignedObjectUrlArgs.builder()
                             .method(Method.GET)
                             .bucket(bucket)
                             .object(objectKey)
                             .expiry(PRESIGNED_URL_EXPIRY_MINUTES, TimeUnit.MINUTES)
+                            .region("us-east-1")
                             .build());
         } catch (Exception e) {
             log.error("Failed to generate pre-signed URL: bucket={}", bucket);

@@ -14,8 +14,10 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.*;
-
 import java.util.UUID;
 
 @RestController
@@ -27,6 +29,18 @@ public class UserProfileController {
 
     private final IUserProfileService userProfileService;
     private final UserProfileProjectionService queryService;
+
+    @GetMapping
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Get all user profiles (Admin only)")
+    public ResponseEntity<ApiResponse<Page<UserProfileResponse>>> getAllUsers(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+
+        Pageable pageable = PageRequest.of(page, size);
+        Page<UserProfileResponse> responses = queryService.getAllUserProfileResponses(pageable);
+        return ResponseEntity.ok(ApiResponse.success(responses));
+    }
 
     @GetMapping("/me")
     @Operation(summary = "Get the authenticated user's profile")
@@ -58,4 +72,5 @@ public class UserProfileController {
         UserProfileResponse response = queryService.getUserProfileResponse(userId);
         return ResponseEntity.ok(ApiResponse.success(response));
     }
+
 }

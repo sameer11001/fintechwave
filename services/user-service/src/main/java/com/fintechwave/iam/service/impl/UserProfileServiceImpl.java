@@ -65,19 +65,7 @@ public class UserProfileServiceImpl implements IUserProfileService {
         log.info("UserProfile created: id={} keycloakId={} email={}", saved.getId(), keycloakId, email);
     }
 
-    @Override
-    public UserProfileResponse findByKeycloakId(UUID keycloakId) {
-        UserProfile profile = userProfileRepository.findByKeycloakId(keycloakId)
-                .orElseThrow(() -> new UserNotFoundException(keycloakId));
-        return toResponse(profile);
-    }
 
-    @Override
-    public UserProfileResponse findById(UUID userId) {
-        UserProfile profile = userProfileRepository.findById(userId)
-                .orElseThrow(() -> new UserNotFoundException(userId));
-        return toResponse(profile);
-    }
 
     @Override
     @Transactional
@@ -114,9 +102,41 @@ public class UserProfileServiceImpl implements IUserProfileService {
         } catch (IllegalArgumentException e) {
             throw new KycNotFoundException(tier);
         }
-        int rows = userProfileRepository.updateKycTier(keycloakId, kycTier);
-        if (rows == 0)
-            throw new UserNotFoundException(keycloakId);
+        
+        UserProfile profile = userProfileRepository.findByKeycloakId(keycloakId)
+                .orElseThrow(() -> new UserNotFoundException(keycloakId));
+
+        profile.setKycTier(kycTier);
+        UserProfile saved = userProfileRepository.save(profile);
+
+        try {
+            GenericDomainEvent domainEvent = new GenericDomainEvent(
+                    "KYC_VERIFIED",
+                    1,
+                    saved.getId(),
+                    "USER",
+                    Map.of(
+                            "userId", saved.getId().toString(),
+                            "keycloakId", saved.getKeycloakId().toString(),
+                            "kycTier", saved.getKycTier().name()));
+
+            String payloadJson = objectMapper.writeValueAsString(domainEvent);
+
+            OutboxEvent outboxEvent = OutboxEvent.builder()
+                    .aggregateId(domainEvent.getAggregateId())
+                    .aggregateType(domainEvent.getAggregateType())
+                    .eventType(domainEvent.getEventType())
+                    .eventVersion(domainEvent.getEventVersion())
+                    .idempotencyKey(domainEvent.getIdempotencyKey())
+                    .topic(TOPIC_USER_EVENTS)
+                    .payload(payloadJson)
+                    .build();
+            outboxEventRepository.save(outboxEvent);
+        } catch (Exception e) {
+            log.error("Failed to build KYC_VERIFIED outbox event for userId={}", saved.getId(), e);
+            throw new RuntimeException("Failed to serialize outbox event for user: " + saved.getId(), e);
+        }
+
         log.info("KYC tier updated: keycloakId={} tier={}", keycloakId, tier);
     }
 

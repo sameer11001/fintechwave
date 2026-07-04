@@ -29,6 +29,9 @@ public class KycEventConsumer {
             JsonNode root = objectMapper.readTree(record.value());
 
             String eventIdStr = root.path("idempotencyKey").asText();
+            if (eventIdStr == null || eventIdStr.isEmpty() || "null".equals(eventIdStr)) {
+                eventIdStr = root.path("id").asText();
+            }
             Boolean isNew = redisTemplate.opsForValue()
                     .setIfAbsent("processed:report-kyc:" + eventIdStr, "1", Duration.ofDays(7));
             if (Boolean.FALSE.equals(isNew)) {
@@ -40,10 +43,19 @@ public class KycEventConsumer {
             String eventType = root.path("eventType").asText();
             JsonNode payload = root.path("payload");
 
-            if ("KYC_VERIFIED".equals(eventType)) {
+            if ("KYC_SUBMITTED".equals(eventType)) {
+                redisTemplate.opsForValue().increment("reporting:pending_kyc_count");
+            } else if ("KYC_VERIFIED".equals(eventType)) {
                 UUID userId = UUID.fromString(payload.path("userId").asText());
-                String kycTier = payload.has("kycTier") ? payload.path("kycTier").asText() : "TIER_1";
+                String kycTier = payload.has("verifiedTier") ? payload.path("verifiedTier").asText()
+                        : (payload.has("kycTier") ? payload.path("kycTier").asText() : "TIER_1");
                 searchIndexingService.indexKycUpdate(userId, kycTier);
+
+                redisTemplate.opsForValue().decrement("reporting:pending_kyc_count");
+                redisTemplate.opsForValue().increment("reporting:kyc_approved_count");
+            } else if ("KYC_REJECTED".equals(eventType)) {
+                redisTemplate.opsForValue().decrement("reporting:pending_kyc_count");
+                redisTemplate.opsForValue().increment("reporting:kyc_rejected_count");
             } else {
                 log.debug("Reporting: ignoring kyc eventType={} as it doesn't affect ES index", eventType);
             }

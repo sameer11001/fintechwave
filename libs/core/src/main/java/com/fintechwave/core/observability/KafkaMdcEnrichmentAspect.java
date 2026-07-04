@@ -26,7 +26,7 @@ public class KafkaMdcEnrichmentAspect {
         try {
             return pjp.proceed();
         } finally {
-            MDC.clear();
+            MDC.remove("correlation_id");
         }
     }
 }
