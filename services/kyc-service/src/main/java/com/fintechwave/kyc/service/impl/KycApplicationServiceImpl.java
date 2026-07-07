@@ -13,6 +13,8 @@ import com.fintechwave.kyc.exception.KycApplicationNotFoundException;
 import com.fintechwave.kyc.query.entity.KycDocumentView;
 import com.fintechwave.kyc.query.service.KycProjectionService;
 import com.fintechwave.kyc.repository.*;
+import com.fintechwave.kyc.mapper.KycApplicationMapper;
+import com.fintechwave.kyc.mapper.KycDocumentMapper;
 import com.fintechwave.kyc.service.IKycApplicationService;
 import com.fintechwave.kyc.grpc.MediaVerificationGrpcClient;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +45,8 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
     private final MediaVerificationGrpcClient mediaVerificationClient;
     private final ObjectMapper objectMapper;
     private final KycProjectionService projectionService;
+    private final KycApplicationMapper applicationMapper;
+    private final KycDocumentMapper documentMapper;
 
     @Override
     @Transactional
@@ -73,8 +77,7 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
 
     @Override
     public KycApplicationResponse getMyApplication(UUID userId) {
-        return KycApplicationResponse.from(
-                findByUserId(userId));
+        return applicationMapper.toResponse(findByUserId(userId));
     }
 
     @Override
@@ -98,7 +101,7 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
 
             log.info("KYC application submitted: applicationId={} requestedTier={}", app.getId(),
                     request.requestedTier());
-            return KycApplicationResponse.from(app);
+            return applicationMapper.toResponse(app);
         }
     }
 
@@ -138,7 +141,7 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
                     document.getUploadedAt()));
 
             log.info("Document saved: applicationId={} documentType={}", app.getId(), request.documentType());
-            return KycDocumentResponse.from(document);
+            return documentMapper.toResponse(document);
         }
     }
 
@@ -156,14 +159,14 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
                                         .collect(java.util.stream.Collectors.joining(", ")));
             }
             return applicationRepository.findAllByStatus(kycStatus, pageable)
-                    .map(KycApplicationResponse::from);
+                    .map(applicationMapper::toResponse);
         }
-        return applicationRepository.findAll(pageable).map(KycApplicationResponse::from);
+        return applicationRepository.findAll(pageable).map(applicationMapper::toResponse);
     }
 
     @Override
     public KycApplicationResponse getApplicationById(UUID applicationId) {
-        return KycApplicationResponse.from(
+        return applicationMapper.toResponse(
                 applicationRepository.findById(applicationId)
                         .orElseThrow(
                                 () -> new KycApplicationNotFoundException("Application not found: " + applicationId)));
@@ -214,7 +217,7 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
             }
 
             applicationRepository.save(app);
-            return KycApplicationResponse.from(app);
+            return applicationMapper.toResponse(app);
         }
     }
 

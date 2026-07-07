@@ -1,6 +1,5 @@
 package com.fintechwave.fraud.service.impl;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fintechwave.fraud.domain.entity.FraudDecision;
 import com.fintechwave.fraud.domain.entity.FraudRule;
@@ -12,6 +11,7 @@ import com.fintechwave.fraud.dto.FraudDecisionResponse;
 import com.fintechwave.fraud.repository.FraudDecisionRepository;
 import com.fintechwave.fraud.repository.FraudRuleRepository;
 import com.fintechwave.fraud.repository.OutboxEventRepository;
+import com.fintechwave.fraud.mapper.FraudDecisionMapper;
 import com.fintechwave.fraud.repository.ProcessedEventRepository;
 import com.fintechwave.fraud.service.IFraudService;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +41,7 @@ public class FraudServiceImpl implements IFraudService {
     private final ProcessedEventRepository processedEventRepository;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final FraudDecisionMapper fraudDecisionMapper;
 
     @Override
     @Transactional
@@ -109,17 +110,7 @@ public class FraudServiceImpl implements IFraudService {
     @Override
     public Page<FraudDecisionResponse> getUserDecisions(UUID userId, Pageable pageable) {
         return fraudDecisionRepository.findByUserIdOrderByDecidedAtDesc(userId, pageable)
-                .map(d -> FraudDecisionResponse.builder()
-                        .id(d.getId())
-                        .transactionId(d.getTransactionId())
-                        .userId(d.getUserId())
-                        .decision(d.getDecision())
-                        .riskScore(d.getRiskScore())
-                        .triggeredRules(d.getTriggeredRules())
-                        .amount(d.getAmount())
-                        .currency(d.getCurrency())
-                        .decidedAt(d.getDecidedAt())
-                        .build());
+                .map(fraudDecisionMapper::toResponse);
     }
 
     private boolean checkVelocity(FraudRule rule, UUID userId, BigDecimal amount) {

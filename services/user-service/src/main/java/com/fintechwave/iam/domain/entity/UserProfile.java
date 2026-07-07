@@ -70,4 +70,8 @@ public class UserProfile {
 
     @Version
     private Long version;
+
+    public boolean isStripeLinked() {
+        return this.stripeCustomerId != null;
+    }
 }

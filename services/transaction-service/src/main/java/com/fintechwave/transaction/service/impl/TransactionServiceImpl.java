@@ -17,6 +17,7 @@ import com.fintechwave.transaction.dto.request.InitiateTransferRequest;
 import com.fintechwave.transaction.dto.response.TransactionResponse;
 import com.fintechwave.transaction.exception.DuplicateTransactionException;
 import com.fintechwave.transaction.exception.InvalidTransactionStateException;
+import com.fintechwave.transaction.mapper.TransactionMapper;
 import com.fintechwave.transaction.repository.OutboxEventRepository;
 import com.fintechwave.transaction.repository.TransactionRepository;
 import com.fintechwave.transaction.service.IFeeService;
@@ -59,6 +60,7 @@ public class TransactionServiceImpl implements ITransactionService {
     private final ObjectMapper objectMapper;
     private final LedgerGrpcClient ledgerGrpcClient;
     private final MeterRegistry meterRegistry;
+    private final TransactionMapper transactionMapper;
 
     private Timer p2pTransferTimer;
 
@@ -133,7 +135,7 @@ public class TransactionServiceImpl implements ITransactionService {
                         .register(meterRegistry)
                         .increment();
 
-                return TransactionResponse.from(tx);
+                return transactionMapper.toResponse(tx);
             } catch (Exception e) {
                 Counter.builder("fintechwave.transaction.failed")
                         .description("Transaction failures, by type and reason")
@@ -185,7 +187,7 @@ public class TransactionServiceImpl implements ITransactionService {
                     .register(meterRegistry)
                     .increment();
 
-            return TransactionResponse.from(tx);
+            return transactionMapper.toResponse(tx);
         } catch (Exception e) {
             Counter.builder("fintechwave.transaction.failed")
                     .description("Transaction failures, by type and reason")
@@ -260,7 +262,7 @@ public class TransactionServiceImpl implements ITransactionService {
                     .register(meterRegistry)
                     .increment();
 
-            return TransactionResponse.from(tx);
+            return transactionMapper.toResponse(tx);
         } catch (Exception e) {
             Counter.builder("fintechwave.transaction.failed")
                     .description("Transaction failures, by type and reason")

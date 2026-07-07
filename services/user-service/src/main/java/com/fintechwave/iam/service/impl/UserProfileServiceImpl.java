@@ -10,6 +10,7 @@ import com.fintechwave.iam.dto.request.UpdateUserProfileRequest;
 import com.fintechwave.iam.dto.response.UserProfileResponse;
 import com.fintechwave.iam.exception.KycNotFoundException;
 import com.fintechwave.iam.exception.UserNotFoundException;
+import com.fintechwave.iam.mapper.UserProfileMapper;
 import com.fintechwave.iam.repository.OutboxEventRepository;
 import com.fintechwave.iam.repository.UserProfileRepository;
 import com.fintechwave.iam.service.IUserProfileService;
@@ -37,6 +38,7 @@ public class UserProfileServiceImpl implements IUserProfileService {
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
     private final KeycloakAdminClient keycloakAdminClient;
+    private final UserProfileMapper userProfileMapper;
 
     @Override
     @Transactional
@@ -88,7 +90,7 @@ public class UserProfileServiceImpl implements IUserProfileService {
                 request.lastName(),
                 request.phone());
 
-        return toResponse(updated);
+        return userProfileMapper.toResponse(updated);
     }
 
     @Override
@@ -137,22 +139,6 @@ public class UserProfileServiceImpl implements IUserProfileService {
         if (rows == 0)
             throw new UserNotFoundException(keycloakId);
         log.info("Stripe customer linked: keycloakId={}", keycloakId);
-    }
-
-    private UserProfileResponse toResponse(UserProfile p) {
-        return UserProfileResponse.builder()
-                .id(p.getId())
-                .keycloakId(p.getKeycloakId())
-                .email(p.getEmail())
-                .firstName(p.getFirstName())
-                .lastName(p.getLastName())
-                .phoneHash(p.getPhoneHash())
-                .status(p.getStatus().name())
-                .kycTier(p.getKycTier().name())
-                .stripeLinked(p.getStripeCustomerId() != null)
-                .createdAt(p.getCreatedAt())
-                .updatedAt(p.getUpdatedAt())
-                .build();
     }
 
     private OutboxEvent buildOutboxEvent(UserProfile profile) {

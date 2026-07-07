@@ -20,6 +20,7 @@ import com.fintechwave.ledger.service.ILedgerService;
 import com.fintechwave.events.GenericDomainEvent;
 import com.fintechwave.core.messaging.OutboxEventHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fintechwave.ledger.mapper.WalletMapper;
 import io.micrometer.tracing.annotation.NewSpan;
 import io.micrometer.tracing.annotation.SpanTag;
 import lombok.RequiredArgsConstructor;
@@ -47,6 +48,7 @@ public class LedgerServiceImpl implements ILedgerService {
     private final LedgerEntryRepository ledgerEntryRepository;
     private final OutboxEventRepository outboxEventRepository;
     private final ObjectMapper objectMapper;
+    private final WalletMapper walletMapper;
 
     @Override
     @Transactional
@@ -77,12 +79,7 @@ public class LedgerServiceImpl implements ILedgerService {
 
             log.info("Wallet provisioned: accountId={} userId={}", account.getId(), userId);
 
-            return WalletResponse.builder()
-                    .accountId(account.getId())
-                    .ownerId(userId)
-                    .balance(BigDecimal.ZERO)
-                    .currency(currency)
-                    .build();
+            return walletMapper.toResponse(account, balance);
         }
     }
 
@@ -252,13 +249,7 @@ public class LedgerServiceImpl implements ILedgerService {
         Balance balance = balanceRepository.findByAccountId(account.getId())
                 .orElseThrow(() -> new WalletNotFoundException(account.getId()));
 
-        return WalletResponse.builder()
-                .accountId(account.getId())
-                .ownerId(userId)
-                .balance(balance.getAmount())
-                .currency(balance.getCurrency())
-                .createdAt(account.getCreatedAt())
-                .build();
+        return walletMapper.toResponse(account, balance);
     }
 
     @Override

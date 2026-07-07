@@ -3,6 +3,7 @@ package com.fintechwave.iam.query.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fintechwave.iam.dto.response.UserProfileResponse;
 import com.fintechwave.iam.exception.UserNotFoundException;
+import com.fintechwave.iam.mapper.UserProfileMapper;
 import com.fintechwave.iam.query.entity.UserProfileView;
 import com.fintechwave.iam.query.repository.UserProfileViewRepository;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ public class UserProfileProjectionService {
     private final UserProfileViewRepository repository;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final UserProfileMapper userProfileMapper;
 
     private static final String CACHE_PREFIX = "fintechwave:user-service:user:";
     private static final Duration CACHE_TTL = Duration.ofMinutes(10);
@@ -72,7 +74,7 @@ public class UserProfileProjectionService {
         if (viewOpt.isEmpty()) {
             viewOpt = repository.findByKeycloakId(idOrKeycloakId);
         }
-        
+
         viewOpt.ifPresent(this::cacheView);
         return viewOpt;
     }
@@ -89,8 +91,9 @@ public class UserProfileProjectionService {
 
     public UserProfileResponse getUserProfileResponse(UUID userId) {
         UserProfileView view = getUserProfile(userId)
-                .orElseThrow(() -> UserNotFoundException.withMessage("User profile not found in read model for ID: " + userId));
-        return mapToResponse(view);
+                .orElseThrow(() -> UserNotFoundException
+                        .withMessage("User profile not found in read model for ID: " + userId));
+        return userProfileMapper.toResponseQuery(view);
     }
 
     public UserProfileResponse getUserProfileResponseByKeycloakId(UUID keycloakId) {
@@ -99,7 +102,7 @@ public class UserProfileProjectionService {
             String cached = redisTemplate.opsForValue().get(cacheKey);
             if (cached != null) {
                 UserProfileView view = objectMapper.readValue(cached, UserProfileView.class);
-                return mapToResponse(view);
+                return userProfileMapper.toResponseQuery(view);
             }
         } catch (Exception e) {
             log.warn("Failed to read from cache for keycloakId={}", keycloakId, e);
@@ -117,25 +120,11 @@ public class UserProfileProjectionService {
             log.error("Failed to cache UserProfileView for keycloakId={}", keycloakId, e);
         }
 
-        return mapToResponse(view);
+        return userProfileMapper.toResponseQuery(view);
     }
 
     public Page<UserProfileResponse> getAllUserProfileResponses(Pageable pageable) {
         return repository.findAll(pageable)
-                .map(this::mapToResponse);
-    }
-
-    private UserProfileResponse mapToResponse(UserProfileView view) {
-        return UserProfileResponse.builder()
-                .id(view.getId())
-                .keycloakId(view.getKeycloakId())
-                .email(view.getEmail())
-                .firstName(view.getFirstName())
-                .lastName(view.getLastName())
-                .status(view.getStatus())
-                .kycTier(view.getKycTier())
-                .createdAt(view.getCreatedAt())
-                .updatedAt(view.getUpdatedAt())
-                .build();
+                .map(userProfileMapper::toResponseQuery);
     }
 }

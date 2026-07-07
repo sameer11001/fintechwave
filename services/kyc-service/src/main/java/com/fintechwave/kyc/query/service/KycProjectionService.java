@@ -1,16 +1,15 @@
 package com.fintechwave.kyc.query.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fintechwave.kyc.domain.enums.KycStatus;
-import com.fintechwave.kyc.domain.enums.KycTier;
 import com.fintechwave.kyc.dto.response.AdminKycApplicationResponse;
 import com.fintechwave.kyc.dto.response.KycApplicationResponse;
 import com.fintechwave.kyc.dto.response.KycDocumentResponse;
-import com.fintechwave.kyc.domain.enums.DocumentType;
 import com.fintechwave.kyc.exception.KycApplicationNotFoundException;
 import com.fintechwave.kyc.query.entity.KycApplicationView;
 import com.fintechwave.kyc.query.entity.KycDocumentView;
 import com.fintechwave.kyc.query.repository.KycApplicationViewRepository;
+import com.fintechwave.kyc.mapper.KycApplicationMapper;
+import com.fintechwave.kyc.mapper.KycDocumentMapper;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +31,8 @@ public class KycProjectionService {
     private final KycApplicationViewRepository repository;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
+    private final KycApplicationMapper kycApplicationMapper;
+    private final KycDocumentMapper kycDocumentMapper;
 
     private static final String CACHE_PREFIX = "fintechwave:kyc-service:app:";
     private static final Duration CACHE_TTL = Duration.ofMinutes(10);
@@ -44,7 +45,7 @@ public class KycProjectionService {
             String cached = redisTemplate.opsForValue().get(cacheKey);
             if (cached != null) {
                 KycApplicationView view = objectMapper.readValue(cached, KycApplicationView.class);
-                return mapToResponse(view);
+                return kycApplicationMapper.toResponseQuery(view);
             }
         } catch (Exception e) {
             log.warn("Failed to read from cache for userId={}", userId, e);
@@ -61,11 +62,11 @@ public class KycProjectionService {
             log.error("Failed to cache KycApplicationView for userId={}", userId, e);
         }
 
-        return mapToResponse(view);
+        return kycApplicationMapper.toResponseQuery(view);
     }
 
     public Page<KycApplicationResponse> listApplications(String status, Pageable pageable) {
-        return repository.findByStatus(status, pageable).map(this::mapToResponse);
+        return repository.findByStatus(status, pageable).map(kycApplicationMapper::toResponseQuery);
     }
 
     public List<KycDocumentResponse> getMyDocumentsFromView(UUID userId) {
@@ -73,42 +74,14 @@ public class KycProjectionService {
                 .orElseThrow(
                         () -> new KycApplicationNotFoundException("KYC Application not found for user: " + userId));
 
-        return view.getDocuments().stream()
-                .map(docView -> KycDocumentResponse.builder()
-                        .id(docView.id())
-                        .documentType(DocumentType.valueOf(docView.documentType()))
-                        .contentType(docView.contentType())
-                        .fileSizeBytes(docView.fileSizeBytes())
-                        .uploadedAt(docView.uploadedAt())
-                        .downloadUrl("/api/v1/media/download/" + docView.storageKey())
-                        .build())
-                .toList();
+        return kycDocumentMapper.toResponseQueryList(view.getDocuments());
     }
 
     public AdminKycApplicationResponse getAdminApplicationById(UUID applicationId) {
         KycApplicationView view = repository.findById(applicationId)
                 .orElseThrow(() -> new KycApplicationNotFoundException("KYC Application not found: " + applicationId));
 
-        return AdminKycApplicationResponse.builder()
-                .id(view.getId())
-                .userId(view.getUserId())
-                .status(KycStatus.valueOf(view.getStatus()))
-                .currentTier(KycTier.valueOf(view.getCurrentTier()))
-                .requestedTier(view.getRequestedTier() != null ? KycTier.valueOf(view.getRequestedTier()) : null)
-                .rejectionReason(view.getRejectionReason())
-                .createdAt(view.getCreatedAt())
-                .updatedAt(view.getUpdatedAt())
-                .documents(view.getDocuments().stream()
-                        .map(docView -> KycDocumentResponse.builder()
-                                .id(docView.id())
-                                .documentType(DocumentType.valueOf(docView.documentType()))
-                                .contentType(docView.contentType())
-                                .fileSizeBytes(docView.fileSizeBytes())
-                                .uploadedAt(docView.uploadedAt())
-                                .downloadUrl("/api/v1/media/download/" + docView.storageKey())
-                                .build())
-                        .toList())
-                .build();
+        return kycApplicationMapper.toAdminResponse(view);
     }
 
     public void handleKycCreated(UUID id, UUID userId, String status, String currentTier, String requestedTier) {
@@ -194,16 +167,4 @@ public class KycProjectionService {
         }
     }
 
-    private KycApplicationResponse mapToResponse(KycApplicationView view) {
-        return KycApplicationResponse.builder()
-                .id(view.getId())
-                .userId(view.getUserId())
-                .status(KycStatus.valueOf(view.getStatus()))
-                .currentTier(KycTier.valueOf(view.getCurrentTier()))
-                .requestedTier(view.getRequestedTier() != null ? KycTier.valueOf(view.getRequestedTier()) : null)
-                .rejectionReason(view.getRejectionReason())
-                .createdAt(view.getCreatedAt())
-                .updatedAt(view.getUpdatedAt())
-                .build();
-    }
 }
