@@ -1,2 +1,4 @@
 com.fintechwave.core.config.CoreWebAutoConfiguration
 com.fintechwave.core.config.CoreAutoConfiguration
+com.fintechwave.core.config.KafkaConsumerAutoConfiguration
+com.fintechwave.core.config.SchedulerAutoConfiguration

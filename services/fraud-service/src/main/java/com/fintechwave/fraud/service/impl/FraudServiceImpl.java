@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import com.fintechwave.events.GenericDomainEvent;
+import com.fintechwave.core.messaging.OutboxEventHelper;
 
 @Service
 @RequiredArgsConstructor
@@ -181,36 +182,26 @@ public class FraudServiceImpl implements IFraudService {
     private void publishToOutbox(UUID transactionId, UUID userId,
             BigDecimal amount, String currency,
             String eventType, int riskScore, List<String> triggeredRules) {
-        try {
-            Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("transactionId", transactionId.toString());
-            payload.put("userId", userId.toString());
-            payload.put("amount", amount);
-            payload.put("currency", currency);
-            payload.put("riskScore", riskScore);
-            payload.put("triggeredRules", triggeredRules);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("transactionId", transactionId.toString());
+        payload.put("userId", userId.toString());
+        payload.put("amount", amount);
+        payload.put("currency", currency);
+        payload.put("riskScore", riskScore);
+        payload.put("triggeredRules", triggeredRules);
 
-            GenericDomainEvent domainEvent = new GenericDomainEvent(
-                    eventType,
-                    1,
-                    transactionId,
-                    "TRANSACTION",
-                    payload);
+        GenericDomainEvent domainEvent = OutboxEventHelper.buildDomainEvent(
+                eventType, 1, transactionId, "TRANSACTION", payload);
 
-            String json = objectMapper.writeValueAsString(domainEvent);
+        String json = OutboxEventHelper.toJson(objectMapper, domainEvent);
 
-            outboxEventRepository.save(OutboxEvent.builder()
-                    .aggregateId(domainEvent.getAggregateId())
-                    .aggregateType(domainEvent.getAggregateType())
-                    .eventType(domainEvent.getEventType())
-                    .payload(json)
-                    .published(false)
-                    .occurredAt(domainEvent.getOccurredAt())
-                    .build());
-
-        } catch (JsonProcessingException e) {
-            log.error("Failed to serialize fraud outbox event for txId={}", transactionId, e);
-            throw new RuntimeException("Fraud outbox serialization failure", e);
-        }
+        outboxEventRepository.save(OutboxEvent.builder()
+                .aggregateId(domainEvent.getAggregateId())
+                .aggregateType(domainEvent.getAggregateType())
+                .eventType(domainEvent.getEventType())
+                .payload(json)
+                .published(false)
+                .occurredAt(domainEvent.getOccurredAt())
+                .build());
     }
 }

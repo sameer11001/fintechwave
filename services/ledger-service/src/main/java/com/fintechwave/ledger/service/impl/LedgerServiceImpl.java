@@ -18,6 +18,7 @@ import com.fintechwave.ledger.repository.LedgerEntryRepository;
 import com.fintechwave.ledger.repository.OutboxEventRepository;
 import com.fintechwave.ledger.service.ILedgerService;
 import com.fintechwave.events.GenericDomainEvent;
+import com.fintechwave.core.messaging.OutboxEventHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.tracing.annotation.NewSpan;
 import io.micrometer.tracing.annotation.SpanTag;
@@ -153,32 +154,23 @@ public class LedgerServiceImpl implements ILedgerService {
             }
 
             if (!enrichedEntries.isEmpty()) {
-                try {
-                    java.util.Map<String, Object> enrichedPayload = new java.util.HashMap<>();
-                    enrichedPayload.put("transactionId", request.transactionId().toString());
-                    enrichedPayload.put("entries", enrichedEntries);
+                java.util.Map<String, Object> enrichedPayload = new java.util.HashMap<>();
+                enrichedPayload.put("transactionId", request.transactionId().toString());
+                enrichedPayload.put("entries", enrichedEntries);
 
-                    GenericDomainEvent domainEvent = new GenericDomainEvent(
-                            "LEDGER_COMMITTED",
-                            1,
-                            request.transactionId(),
-                            "LEDGER",
-                            enrichedPayload);
-                    String payloadJson = objectMapper.writeValueAsString(domainEvent);
-                    outboxEventRepository.save(OutboxEvent.builder()
-                            .aggregateId(domainEvent.getAggregateId())
-                            .aggregateType(domainEvent.getAggregateType())
-                            .eventType(domainEvent.getEventType())
-                            .topic("ledger.transaction-results")
-                            .payload(payloadJson)
-                            .idempotencyKey(UUID.randomUUID())
-                            .published(false)
-                            .build());
-                } catch (Exception e) {
-                    log.error("Failed to serialize outbox event for ledger commit: txId={}", request.transactionId(),
-                            e);
-                    throw new RuntimeException("Outbox serialization failed", e);
-                }
+                GenericDomainEvent domainEvent = OutboxEventHelper.buildDomainEvent(
+                        "LEDGER_COMMITTED", 1, request.transactionId(), "LEDGER", enrichedPayload);
+                String payloadJson = OutboxEventHelper.toJson(objectMapper, domainEvent);
+
+                outboxEventRepository.save(OutboxEvent.builder()
+                        .aggregateId(domainEvent.getAggregateId())
+                        .aggregateType(domainEvent.getAggregateType())
+                        .eventType(domainEvent.getEventType())
+                        .topic("ledger.transaction-results")
+                        .payload(payloadJson)
+                        .idempotencyKey(UUID.randomUUID())
+                        .published(false)
+                        .build());
             }
 
             log.info("Double-entry committed: transactionId={}", request.transactionId());
@@ -304,43 +296,36 @@ public class LedgerServiceImpl implements ILedgerService {
 
             log.warn("SIMULATING DIVERGENCE: Platform float artificially inflated by $2,000.00");
 
-            try {
-                java.util.Map<String, Object> enrichedPayload = new java.util.HashMap<>();
-                enrichedPayload.put("transactionId", UUID.randomUUID().toString());
+            java.util.Map<String, Object> enrichedPayload = new java.util.HashMap<>();
+            enrichedPayload.put("transactionId", UUID.randomUUID().toString());
 
-                List<Map<String, Object>> fakeEntries = new ArrayList<>();
-                Map<String, Object> fakeEntry = new HashMap<>();
-                fakeEntry.put("accountId", floatAccount.getId().toString());
-                fakeEntry.put("accountCode", floatAccount.getAccountCode());
-                fakeEntry.put("accountType", floatAccount.getAccountType().name());
-                fakeEntry.put("entryType", "CREDIT");
-                fakeEntry.put("amount", new BigDecimal("2000.00"));
-                fakeEntry.put("currency", "USD");
-                fakeEntry.put("idempotencyKey", UUID.randomUUID().toString());
-                fakeEntry.put("description", "DIVERGENCE SIMULATION");
-                fakeEntries.add(fakeEntry);
+            List<Map<String, Object>> fakeEntries = new ArrayList<>();
+            Map<String, Object> fakeEntry = new HashMap<>();
+            fakeEntry.put("accountId", floatAccount.getId().toString());
+            fakeEntry.put("accountCode", floatAccount.getAccountCode());
+            fakeEntry.put("accountType", floatAccount.getAccountType().name());
+            fakeEntry.put("entryType", "CREDIT");
+            fakeEntry.put("amount", new BigDecimal("2000.00"));
+            fakeEntry.put("currency", "USD");
+            fakeEntry.put("idempotencyKey", UUID.randomUUID().toString());
+            fakeEntry.put("description", "DIVERGENCE SIMULATION");
+            fakeEntries.add(fakeEntry);
 
-                enrichedPayload.put("entries", fakeEntries);
+            enrichedPayload.put("entries", fakeEntries);
 
-                GenericDomainEvent domainEvent = new GenericDomainEvent(
-                        "LEDGER_COMMITTED",
-                        1,
-                        UUID.randomUUID(),
-                        "LEDGER",
-                        enrichedPayload);
-                String payloadJson = objectMapper.writeValueAsString(domainEvent);
-                outboxEventRepository.save(OutboxEvent.builder()
-                        .aggregateId(domainEvent.getAggregateId())
-                        .aggregateType(domainEvent.getAggregateType())
-                        .eventType(domainEvent.getEventType())
-                        .topic("ledger.transaction-results")
-                        .payload(payloadJson)
-                        .idempotencyKey(UUID.randomUUID())
-                        .published(false)
-                        .build());
-            } catch (Exception e) {
-                log.error("Failed to serialize outbox event for divergence simulation", e);
-            }
+            GenericDomainEvent domainEvent = OutboxEventHelper.buildDomainEvent(
+                    "LEDGER_COMMITTED", 1, UUID.randomUUID(), "LEDGER", enrichedPayload);
+            String payloadJson = OutboxEventHelper.toJson(objectMapper, domainEvent);
+
+            outboxEventRepository.save(OutboxEvent.builder()
+                    .aggregateId(domainEvent.getAggregateId())
+                    .aggregateType(domainEvent.getAggregateType())
+                    .eventType(domainEvent.getEventType())
+                    .topic("ledger.transaction-results")
+                    .payload(payloadJson)
+                    .idempotencyKey(UUID.randomUUID())
+                    .published(false)
+                    .build());
         }
     }
 

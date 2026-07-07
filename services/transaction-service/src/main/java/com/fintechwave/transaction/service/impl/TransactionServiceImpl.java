@@ -34,6 +34,7 @@ import java.util.UUID;
 
 import com.fintechwave.core.observability.BusinessContextMdc;
 import com.fintechwave.events.GenericDomainEvent;
+import com.fintechwave.core.messaging.OutboxEventHelper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -438,28 +439,18 @@ public class TransactionServiceImpl implements ITransactionService {
 
     private void publishOutboxEvent(UUID aggregateId, String aggregateType,
             String eventType, int version, Map<String, Object> payload) {
-        try {
-            GenericDomainEvent domainEvent = new GenericDomainEvent(
-                    eventType,
-                    version,
-                    aggregateId,
-                    aggregateType,
-                    payload);
-
-            String payloadJson = objectMapper.writeValueAsString(domainEvent);
-            outboxEventRepository.save(OutboxEvent.builder()
-                    .aggregateId(domainEvent.getAggregateId())
-                    .aggregateType(domainEvent.getAggregateType())
-                    .eventType(domainEvent.getEventType())
-                    .eventVersion(domainEvent.getEventVersion())
-                    .payload(payloadJson)
-                    .idempotencyKey(domainEvent.getIdempotencyKey())
-                    .published(false)
-                    .build());
-        } catch (Exception e) {
-            log.error("Failed to serialize outbox event: eventType={}", eventType, e);
-            throw new RuntimeException("Outbox serialization failed", e);
-        }
+        GenericDomainEvent domainEvent = OutboxEventHelper.buildDomainEvent(
+                eventType, version, aggregateId, aggregateType, payload);
+        String payloadJson = OutboxEventHelper.toJson(objectMapper, domainEvent);
+        outboxEventRepository.save(OutboxEvent.builder()
+                .aggregateId(domainEvent.getAggregateId())
+                .aggregateType(domainEvent.getAggregateType())
+                .eventType(domainEvent.getEventType())
+                .eventVersion(domainEvent.getEventVersion())
+                .payload(payloadJson)
+                .idempotencyKey(domainEvent.getIdempotencyKey())
+                .published(false)
+                .build());
     }
 
     @Scheduled(fixedDelay = 300_000)

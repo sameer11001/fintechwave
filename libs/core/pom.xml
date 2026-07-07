@@ -63,6 +63,31 @@
             <optional>true</optional>
         </dependency>
 
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+            <version>5.13.0</version>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-redis-spring</artifactId>
+            <version>5.13.0</version>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>com.fintechwave</groupId>
+            <artifactId>events</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+
         <!-- Micrometer Tracing — @NewSpan / @SpanTag annotation support -->
         <dependency>
             <groupId>io.micrometer</groupId>

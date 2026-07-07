@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.UUID;
 import com.fintechwave.events.GenericDomainEvent;
 import com.fintechwave.core.observability.BusinessContextMdc;
+import com.fintechwave.core.messaging.OutboxEventHelper;
 
 @Service
 @RequiredArgsConstructor
@@ -224,28 +225,18 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
 
     private void publishOutboxEvent(UUID aggregateId, String aggregateType,
             String eventType, int version, Map<String, Object> payload) {
-        try {
-            GenericDomainEvent domainEvent = new GenericDomainEvent(
-                    eventType,
-                    version,
-                    aggregateId,
-                    aggregateType,
-                    payload);
-
-            String payloadJson = objectMapper.writeValueAsString(domainEvent);
-            OutboxEvent outbox = OutboxEvent.builder()
-                    .aggregateId(domainEvent.getAggregateId())
-                    .aggregateType(domainEvent.getAggregateType())
-                    .eventType(domainEvent.getEventType())
-                    .eventVersion(domainEvent.getEventVersion())
-                    .payload(payloadJson)
-                    .idempotencyKey(domainEvent.getIdempotencyKey())
-                    .published(false)
-                    .build();
-            outboxEventRepository.save(outbox);
-        } catch (Exception e) {
-            log.error("Failed to serialize outbox event: eventType={}", eventType, e);
-            throw new RuntimeException("Outbox event serialization failed", e);
-        }
+        GenericDomainEvent domainEvent = OutboxEventHelper.buildDomainEvent(
+                eventType, version, aggregateId, aggregateType, payload);
+        String payloadJson = OutboxEventHelper.toJson(objectMapper, domainEvent);
+        OutboxEvent outbox = OutboxEvent.builder()
+                .aggregateId(domainEvent.getAggregateId())
+                .aggregateType(domainEvent.getAggregateType())
+                .eventType(domainEvent.getEventType())
+                .eventVersion(domainEvent.getEventVersion())
+                .payload(payloadJson)
+                .idempotencyKey(domainEvent.getIdempotencyKey())
+                .published(false)
+                .build();
+        outboxEventRepository.save(outbox);
     }
 }
