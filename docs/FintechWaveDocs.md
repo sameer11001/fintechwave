@@ -220,6 +220,7 @@ User → Keycloak (authenticate) → JWT (RS256)
 | API Gateway      | **gateway**                                | ✅ Done — Phase 1 | 8080        |
 | Config Server    | **config-server**                          | ✅ Done — Phase 1 | 8888        |
 | Admin Portal     | **fintechwave-admin-portal** (Angular)     | ✅ Done — Phase 6 | 4200        |
+| Media / Assets   | **media-service**                          | ✅ Done           | 8089        |
 | Merchant         | Future                                     | —                 | TBD         |
 | Settlement       | Deferred                                   | —                 | TBD         |
 
@@ -676,6 +677,16 @@ Distributed events are secured with robust error recovery patterns:
 - **Observability Pipeline**: Trace, log, and metric streams are routed through the OpenTelemetry Collector to Loki, Tempo, and Prometheus, visualizing end-to-end request flows in Grafana.
 - **Alerting Rules**: Defined business alerts in `alerts.yml` for SLA tracking, covering high transaction failure rates (>1%), virtual thread pinning (`tracePinnedThreads`), and critical DLQ volumes.
 
+##### 6. Centralized MapStruct Mapping Layer
+To eliminate DTO-to-entity tight coupling and scatter manual mapping, the system uses a centralized **MapStruct** mapping layer across all microservices. 
+- **Type-safe Mappers**: Spring-managed `@Mapper(componentModel = "spring")` interfaces standardize object transformation.
+- **CQRS Dual-Mapping**: Explicit methods like `toResponseQuery` handle read-model projections distinct from write-model transformations.
+
+##### 7. Global API Page Serialization Configuration
+To address Spring Data `PageImpl` JSON serialization stability:
+- **Global Page Serialization**: Enabled globally via `@EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)`.
+- **Stable APIs**: All paginated responses strictly return `PagedModel` structures using `PagedResourcesAssembler` for consistent frontend parsing.
+
 ### Phase 5 — System Resilience & Fault Tolerance 🔲
 
 Based on the [System Resilience Audit & Implementation Plan](System_Resilience.md), the following gaps are being addressed to harden the platform for production:
@@ -683,11 +694,12 @@ Based on the [System Resilience Audit & Implementation Plan](System_Resilience.m
 - **Phase 2 (Important):** Kafka idempotency guards for read-model consumers, circuit breaker metrics & alerts, rate limiting on KYC routes.
 - **Phase 3 (Advanced):** Service-level Bulkheads, Chaos engineering fault injection, DB connection pool limits.
 
-### Phase 6 — Frontend Admin Portal 🔲
+### Phase 6 — Frontend Admin Portal ✅ COMPLETE
 
 The platform administration interface (`fintechwave-admin-portal`) is built in Angular, operating on port 4200. It connects to the API Gateway to monitor the overall health and operations of the platform.
-- **Ledger & Reconciliation Dashboard**: Visualize the double-entry accounting state, trial balances, and system divergence warnings.
-- **Robust UI Error Handling**: Handles CQRS latency via optimistic updates, and manages 503/504 gateway failures with unified interceptors and retry fallbacks.
+- ✅ **Ledger & Reconciliation Dashboard**: Visualize the double-entry accounting state, trial balances, and system divergence warnings via the Trial Balance Component.
+- ✅ **Transaction Ledger Interface**: Clean UI separation between ledger dashboards and transaction history list filters.
+- ✅ **Robust UI Error Handling**: Handles CQRS latency via optimistic updates, and manages 503/504 gateway failures with unified interceptors and retry fallbacks.
 
 ---
 
@@ -708,6 +720,7 @@ The platform administration interface (`fintechwave-admin-portal`) is built in A
 | fraud-service        | 8085                | Phase 4 — Redis velocity checks     |
 | notification-service | 8086                | Phase 4 — SendGrid/Twilio/FCM       |
 | reporting-service    | 8087                | Phase 4 — Elasticsearch reporting   |
+| media-service        | 8089                | Media asset & image storage service |
 | PostgreSQL           | 5432                | Primary ACID Database               |
 | Redis                | 6379                | Caching / Fraud sliding windows     |
 | Kafka                | 29092 (host) / 9092 | KRaft mode (no Zookeeper)           |
@@ -735,6 +748,7 @@ The platform administration interface (`fintechwave-admin-portal`) is built in A
 | fraud-service        | `fintechwave_fraud`  | Flyway V1 (`fraud_rule` …)                     |
 | notification-service | `fintechwave_notif`  | Flyway V1 (`notification` …)                   |
 | reporting-service    | `elasticsearch`      | Indexing read-models (Transactions/Users)      |
+| media-service        | `fintechwave_media`  | Flyway V1 (`media_assets` …)                   |
 | CQRS Read Models     | `fintechwave_views`  | MongoDB Database                               |
 
 ---

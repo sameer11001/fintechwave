@@ -9,7 +9,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE_FILE="$REPO_ROOT/docker/docker-compose.yml"
+COMPOSE_FILE="$REPO_ROOT/infra/docker-compose.yml"
 
 case "${1:-up}" in
   up)
@@ -21,9 +21,11 @@ case "${1:-up}" in
 
     echo ""
     echo "✅  All services are starting. Endpoints:"
-    echo "    IAM Service         → http://localhost:8081"
-    echo "    IAM Swagger UI      → http://localhost:8081/swagger-ui.html"
-    echo "    Transaction Service → http://localhost:8082"
+    echo "    API Gateway         → http://localhost:8080"
+    echo "    User Service        → http://localhost:8081"
+    echo "    KYC Service         → http://localhost:8082"
+    echo "    Ledger Service      → http://localhost:8083"
+    echo "    Transaction Service → http://localhost:8084"
     echo ""
     echo "📋  Tail logs with: ./scripts/build-and-run.sh logs"
     ;;

@@ -15,6 +15,7 @@ FintechWave is a secure, scalable, and enterprise-grade custodial e-money platfo
 FintechWave is architected for maximum throughput, low latency, and zero data loss. It runs on a cutting-edge cloud-native stack:
 
 - **Runtime & Framework**: Java 21, Spring Boot 3, Spring Cloud Gateway
+- **Object Mapping**: MapStruct for high-performance, type-safe entity-DTO transformations.
 - **Virtual Threads (Java Project Loom)**: Enabled system-wide (`spring.threads.virtual.enabled: true`) with customized executors for high-concurrency gRPC and Kafka message processing.
 - **Relational Datastore**: PostgreSQL 16 (Logical WAL replication enabled for CDC outbox relays).
 - **NoSQL read-models (CQRS)**: MongoDB (for real-time projection views) & Elasticsearch 8 (for fast reporting indexes).
@@ -44,12 +45,13 @@ A mathematically sound bookkeeping core enforces absolute precision:
 - **Double-Entry Enforceability**: Every transaction requires matching debit and credit entries (`SUM(DEBIT) == SUM(CREDIT)`). Balances are never adjusted without an audit trail.
 - **Continuous Reconciliation**: The ledger compares total user liabilities against the platform float account, triggering immediate alerts on discrepancies.
 - **Two-Phase Transfers**: Fund transfers use a reserve-and-commit pattern (`RESERVED` -> `COMMITTED`), preventing double-spending and balance-locking issues.
+- **Trial Balance & Divergence Detection**: Dedicated ledger reconciliation engines continuously verify the aggregate user wallet liabilities against the platform float asset account, visualized directly within the Angular Admin Portal.
 
 ### 3. Payment Gateway Integration
 
 Bridges digital wallets to the fiat banking system:
 
-- **Cash-In / Cash-Out**: Integrated with Stripe for card deposits and bank withdrawals.
+- **Cash-In / Cash-Out**: Integrated with Stripe for card deposits and bank withdrawals. (Local development utilizes `stripe/docker-compose.yml` to run the Stripe CLI and forward webhooks to the Transaction Service).
 - **Internal P2P**: Instant peer-to-peer balance transfers between onboarded users.
 - **Compensating Transactions**: DLT consumer triggers auto-refunds and rollbacks on failed payments.
 
@@ -81,7 +83,12 @@ FintechWave features a unified, correlation-linked observability stack managed v
 
 ### Step 1: Clone and Build
 
-Build all packages and libraries using the parent Maven aggregator:
+You can use the provided build script to compile and spin up the entire cluster:
+```bash
+./scripts/build-and-run.sh up
+```
+
+Alternatively, build all packages manually using the parent Maven aggregator:
 
 ```bash
 mvn clean install -DskipTests
@@ -110,6 +117,7 @@ Services can be run locally using their Spring Boot maven profiles or packaged i
 | **Loki**          | `3100` | Log aggregation engine          |
 | **Tempo**         | `3200` | Distributed trace visualizer    |
 | **Kafka Connect** | `8088` | Debezium CDC connector REST API |
+| **Media Service** | `8089` | Media Asset Management Service  |
 | **Admin Portal**  | `4200` | Angular Administration UI       |
 
 ---
