@@ -9,6 +9,7 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
     CREATE DATABASE fintechwave_fraud;
     CREATE DATABASE fintechwave_notif;
     CREATE DATABASE fintechwave_report;
+    CREATE DATABASE fintechwave_media;
 EOSQL
 
 echo "All FintechWave databases created."

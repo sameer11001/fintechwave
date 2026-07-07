@@ -1,17 +1,13 @@
 package com.fintechwave.gateway;
 
-import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
-import io.github.resilience4j.timelimiter.TimeLimiterConfig;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.cloud.circuitbreaker.resilience4j.ReactiveResilience4JCircuitBreakerFactory;
-import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JConfigBuilder;
-import org.springframework.cloud.client.circuitbreaker.Customizer;
 import org.springframework.cloud.gateway.filter.ratelimit.KeyResolver;
 import org.springframework.cloud.gateway.filter.ratelimit.RedisRateLimiter;
 import org.springframework.cloud.gateway.route.RouteLocator;
 import org.springframework.cloud.gateway.route.builder.RouteLocatorBuilder;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpMethod;
 import reactor.core.publisher.Mono;
 
@@ -47,7 +43,13 @@ public class GatewayApplication {
                                                 .path("/api/v1/kyc/**", "/api/v1/admin/kyc/**")
                                                 .filters(f -> f
                                                                 .addResponseHeader("X-Response-Time",
-                                                                                LocalDateTime.now().toString()))
+                                                                                LocalDateTime.now().toString())
+                                                                .requestRateLimiter(config -> config
+                                                                                .setRateLimiter(redisRateLimiter())
+                                                                                .setKeyResolver(userKeyResolver()))
+                                                                .circuitBreaker(config -> config
+                                                                                .setName("kycCircuitBreaker")
+                                                                                .setFallbackUri("forward:/fallback/kyc")))
                                                 .uri("http://kyc-service:8082"))
 
                                 // ── Ledger Service (double-entry bookkeeping, balance queries) ─────
@@ -129,20 +131,22 @@ public class GatewayApplication {
                                                                                 .setName("reportingCircuitBreaker")
                                                                                 .setFallbackUri("forward:/fallback/reports")))
                                                 .uri("http://reporting-service:8087"))
+
+                                // ── Media Service ──────────────────────────────────────────────────
+                                .route("media-service", p -> p
+                                                .path("/api/v1/media/**")
+                                                .filters(f -> f
+                                                                .addResponseHeader("X-Response-Time",
+                                                                                LocalDateTime.now().toString())
+                                                                .circuitBreaker(config -> config
+                                                                                .setName("mediaCircuitBreaker")
+                                                                                .setFallbackUri("forward:/fallback/media")))
+                                                .uri("http://media-service:8089"))
                                 .build();
         }
 
         @Bean
-        public Customizer<ReactiveResilience4JCircuitBreakerFactory> defaultCircuitBreakerCustomizer() {
-                return factory -> factory.configureDefault(id -> new Resilience4JConfigBuilder(id)
-                                .circuitBreakerConfig(CircuitBreakerConfig.ofDefaults())
-                                .timeLimiterConfig(TimeLimiterConfig.custom()
-                                                .timeoutDuration(Duration.ofSeconds(10))
-                                                .build())
-                                .build());
-        }
-
-        @Bean
+        @Primary
         public RedisRateLimiter redisRateLimiter() {
                 return new RedisRateLimiter(10, 20, 1);
         }

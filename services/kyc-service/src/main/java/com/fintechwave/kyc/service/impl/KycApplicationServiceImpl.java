@@ -2,7 +2,6 @@ package com.fintechwave.kyc.service.impl;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fintechwave.kyc.domain.entity.*;
-import com.fintechwave.kyc.domain.enums.DocumentType;
 import com.fintechwave.kyc.domain.enums.KycStatus;
 import com.fintechwave.kyc.domain.enums.KycTier;
 import com.fintechwave.kyc.dto.request.AdminReviewRequest;
@@ -15,14 +14,15 @@ import com.fintechwave.kyc.query.entity.KycDocumentView;
 import com.fintechwave.kyc.query.service.KycProjectionService;
 import com.fintechwave.kyc.repository.*;
 import com.fintechwave.kyc.service.IKycApplicationService;
-import com.fintechwave.kyc.storage.IDocumentStorageService;
+import com.fintechwave.kyc.grpc.MediaVerificationGrpcClient;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.multipart.MultipartFile;
+import com.fintechwave.kyc.dto.request.UploadDocumentRequest;
+import com.fintechwave.media.api.grpc.ClaimMediaResponse;
 
 import java.time.Instant;
 import java.util.Map;
@@ -39,7 +39,7 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
     private final KycApplicationRepository applicationRepository;
     private final KycDocumentRepository documentRepository;
     private final OutboxEventRepository outboxEventRepository;
-    private final IDocumentStorageService storageService;
+    private final MediaVerificationGrpcClient mediaVerificationClient;
     private final ObjectMapper objectMapper;
     private final KycProjectionService projectionService;
 
@@ -103,49 +103,40 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
 
     @Override
     @Transactional
-    public KycDocumentResponse uploadDocument(UUID userId, DocumentType documentType, MultipartFile file) {
+    public KycDocumentResponse uploadDocument(UUID userId, UploadDocumentRequest request) {
         KycApplication app = findByUserId(userId);
         try (var ctx = BusinessContextMdc.of(userId, app.getId(), "KYC_DOCUMENT_UPLOADED")) {
             if (app.getStatus() == KycStatus.VERIFIED) {
                 throw new InvalidKycStateTransitionException("Documents cannot be added to a verified application");
             }
 
-            if (file.isEmpty()) {
-                throw new InvalidKycStateTransitionException("Uploaded file is empty");
+            ClaimMediaResponse mediaResponse = mediaVerificationClient.claimMedia(request.mediaId(), userId);
+            if (!mediaResponse.getValid()) {
+                throw new InvalidKycStateTransitionException(
+                        "Invalid or already claimed media ID: " + request.mediaId());
             }
-
-            String contentType = file.getContentType();
-            if (contentType == null || contentType.isBlank()) {
-                contentType = "application/octet-stream";
-                log.warn(
-                        "Content-Type not provided for document upload: applicationId={} documentType={} — defaulting to application/octet-stream",
-                        app.getId(), documentType);
-            }
-
-            IDocumentStorageService.StorageReference ref = storageService.upload(app.getId(), userId,
-                    documentType.name(),
-                    file);
 
             KycDocument document = KycDocument.builder()
                     .application(app)
-                    .documentType(documentType)
-                    .storageBucket(ref.bucket())
-                    .storageKey(ref.objectKey())
-                    .contentType(contentType)
-                    .fileSizeBytes(file.getSize())
+                    .documentType(request.documentType())
+                    .storageBucket("media-uploads") // Fixed bucket or can be removed if not needed
+                    .storageKey(request.mediaId().toString())
+                    .contentType("application/octet-stream") // Or fetch from media service if we want, currently not
+                                                             // exposed in response
+                    .fileSizeBytes(0L) // Or fetch from media service
                     .build();
             documentRepository.save(document);
 
             projectionService.handleDocumentUploaded(app.getId(), new KycDocumentView(
                     document.getId(),
-                    documentType.name(),
-                    ref.bucket(),
-                    ref.objectKey(),
-                    contentType,
-                    file.getSize(),
+                    request.documentType().name(),
+                    "media-uploads",
+                    request.mediaId().toString(),
+                    "application/octet-stream",
+                    0L,
                     document.getUploadedAt()));
 
-            log.info("Document saved: applicationId={} documentType={}", app.getId(), documentType);
+            log.info("Document saved: applicationId={} documentType={}", app.getId(), request.documentType());
             return KycDocumentResponse.from(document);
         }
     }

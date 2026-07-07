@@ -54,6 +54,7 @@ public class KafkaConsumerConfig {
         executor.setCorePoolSize(5);
         executor.setMaxPoolSize(10);
         executor.setQueueCapacity(25);
+        executor.setVirtualThreads(false);
         executor.initialize();
         factory.getContainerProperties().setListenerTaskExecutor(executor);
 

@@ -1,6 +1,5 @@
 package com.fintechwave.kyc.api;
 
-import com.fintechwave.kyc.domain.enums.DocumentType;
 import com.fintechwave.kyc.dto.request.SubmitKycRequest;
 import com.fintechwave.kyc.dto.response.KycApplicationResponse;
 import com.fintechwave.kyc.dto.response.KycDocumentResponse;
@@ -14,7 +13,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.multipart.MultipartFile;
+import com.fintechwave.kyc.dto.request.UploadDocumentRequest;
 
 import java.util.List;
 import java.util.UUID;
@@ -48,19 +47,18 @@ public class KycController {
         return ResponseEntity.ok(kycService.submitApplication(userId, request));
     }
 
-    @PostMapping(value = "/documents/{documentType}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PostMapping(value = "/documents", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<KycDocumentResponse> uploadDocument(
             @AuthenticationPrincipal Jwt jwt,
-            @PathVariable("documentType") DocumentType documentType,
-            @RequestParam("file") MultipartFile file) {
+            @RequestBody @Valid UploadDocumentRequest request) {
         UUID userId = UUID.fromString(jwt.getSubject());
-        return ResponseEntity.ok(kycService.uploadDocument(userId, documentType, file));
+        return ResponseEntity.ok(kycService.uploadDocument(userId, request));
     }
 
     /**
      * GET /api/v1/kyc/documents
-     * Returns all documents for the calling user with pre-signed MinIO URLs (15-min
-     * TTL).
+     * Returns all documents for the calling user.
+     * Document download URLs point to the decoupled Media Service.
      */
     @GetMapping("/documents")
     public ResponseEntity<List<KycDocumentResponse>> getMyDocuments(

@@ -2,6 +2,7 @@ package com.fintechwave.notification.messaging;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fintechwave.core.messaging.IdempotencyGuard;
 import com.fintechwave.notification.domain.enums.NotificationChannel;
 import com.fintechwave.notification.service.INotificationService;
 import lombok.RequiredArgsConstructor;
@@ -11,7 +12,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -21,7 +21,7 @@ public class FraudEventConsumer {
 
     private final INotificationService notificationService;
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final IdempotencyGuard idempotencyGuard;
 
     @KafkaListener(topics = {
             "fraud.risk-events" }, groupId = "notification-service-fraud", containerFactory = "kafkaListenerContainerFactory")
@@ -30,9 +30,10 @@ public class FraudEventConsumer {
             JsonNode root = objectMapper.readTree(record.value());
 
             String eventIdStr = root.path("idempotencyKey").asText();
-            Boolean isNew = redisTemplate.opsForValue()
-                    .setIfAbsent("processed:notif-fraud:" + eventIdStr, "1", Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
+            if (eventIdStr == null || eventIdStr.isEmpty() || "null".equals(eventIdStr)) {
+                eventIdStr = root.path("id").asText();
+            }
+            if (idempotencyGuard.isAlreadyProcessed("notif-fraud", eventIdStr)) {
                 log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();
                 return;

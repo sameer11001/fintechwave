@@ -6,11 +6,11 @@ import com.fintechwave.reporting.service.SearchIndexingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -19,8 +19,9 @@ import java.util.UUID;
 public class KycEventConsumer {
 
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final com.fintechwave.core.messaging.IdempotencyGuard idempotencyGuard;
     private final SearchIndexingService searchIndexingService;
+    private final StringRedisTemplate redisTemplate;
 
     @KafkaListener(topics = {
             "kyc.verification-events" }, groupId = "reporting-service-kyc", containerFactory = "kafkaListenerContainerFactory")
@@ -32,9 +33,7 @@ public class KycEventConsumer {
             if (eventIdStr == null || eventIdStr.isEmpty() || "null".equals(eventIdStr)) {
                 eventIdStr = root.path("id").asText();
             }
-            Boolean isNew = redisTemplate.opsForValue()
-                    .setIfAbsent("processed:report-kyc:" + eventIdStr, "1", Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
+            if (idempotencyGuard.isAlreadyProcessed("report-kyc", eventIdStr)) {
                 log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();
                 return;

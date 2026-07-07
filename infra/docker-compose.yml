@@ -133,6 +133,8 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
       CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
       KAFKA_HEAP_OPTS: "-Xmx512m -Xms512m"
+      # NOTE: RF=1 is for development only. Production requires RF=3 with min.insync.replicas=2.
+
     ports:
       - "29092:29092"
     volumes:
@@ -361,12 +363,10 @@ services:
       DB_PASS:             ${DB_PASS:-postgres}
       KEYCLOAK_URL:        http://keycloak:8080
       KAFKA_BOOTSTRAP:     kafka:9092
+      MEDIA_SERVICE_HOST:  "media-service"
       SPRING_DATA_REDIS_HOST:  redis
       SPRING_DATA_REDIS_PORT:  6379
       SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
-      MINIO_ENDPOINT:      http://minio:9000
-      MINIO_ACCESS_KEY:    ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY:    ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
       - "8082:8082"
     volumes:
@@ -457,7 +457,7 @@ services:
       SPRING_DATA_REDIS_HOST:  redis
       SPRING_DATA_REDIS_PORT:  6379
       SPRING_DATA_MONGODB_URI: mongodb://mongoroot:mongopassword@mongodb:27017/fintechwave_views?authSource=admin
-      LEDGER_SERVICE_HOST:     ledger-service
+      LEDGER_SERVICE_HOST:     "ledger-service"
       STRIPE_API_KEY:          ${STRIPE_API_KEY:-sk_test_51Tg6jpFYLnavoJLBI9Wngbq7jwmmU2FsOztcX3VJWHKCa538C4K8u3VPb5p413UizHOjIZFx9Z3ikA7IQxQM0AGf00OpdNmv2X}
       STRIPE_WEBHOOK_SECRET:   ${STRIPE_WEBHOOK_SECRET:-whsec_4e48d4fec09ffb4c2fec97d4a600c5fdfeb83c5b033644b88fc3b503fc5f3e55}
     ports:
@@ -623,6 +623,51 @@ services:
       start_period: 45s
     restart: no
 
+  media-service:
+    image: fintechwave/media-service:latest
+    container_name: fintechwave-media
+    environment:
+      JAVA_TOOL_OPTIONS:   "-javaagent:/agents/opentelemetry-javaagent.jar -Xmx256m -Xms128m"
+      OTEL_SERVICE_NAME:   media-service
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER:  otlp
+      CONFIG_SERVER_URI:   http://config-server:8888
+      DB_HOST:             postgres
+      DB_PORT:             5432
+      DB_NAME:             fintechwave_media
+      DB_USER:             postgres
+      DB_PASS:             ${DB_PASS:-postgres}
+      KEYCLOAK_URL:        http://keycloak:8080
+      MINIO_INTERNAL_ENDPOINT: http://minio:9000
+      MINIO_EXTERNAL_ENDPOINT: http://localhost:9000
+      MINIO_ACCESS_KEY:    ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_KEY:    ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./observability/agents:/agents:ro
+    networks:
+      - fintechwave
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      minio-server:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8089/actuator/health > /dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+    restart: no
+
 # ─── Observability & Monitoring ───────────────────────────────────────────
 
   minio-setup:
@@ -636,7 +681,8 @@ services:
     entrypoint: >
       /bin/sh -c "
       /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin &&
-      (/usr/bin/mc mb myminio/loki-data || true)
+      (/usr/bin/mc mb myminio/loki-data || true) &&
+      (/usr/bin/mc mb myminio/media-uploads || true)
       "
 
   loki:

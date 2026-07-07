@@ -2,6 +2,7 @@ package com.fintechwave.reporting.messaging;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fintechwave.core.messaging.IdempotencyGuard;
 import com.fintechwave.reporting.service.SearchIndexingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -11,7 +12,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -20,6 +20,7 @@ import java.util.UUID;
 public class UserEventConsumer {
 
     private final ObjectMapper objectMapper;
+    private final IdempotencyGuard idempotencyGuard;
     private final StringRedisTemplate redisTemplate;
     private final SearchIndexingService searchIndexingService;
 
@@ -32,9 +33,7 @@ public class UserEventConsumer {
                 eventIdStr = root.path("id").asText();
             }
 
-            Boolean isNew = redisTemplate.opsForValue()
-                    .setIfAbsent("processed:report-user:" + eventIdStr, "1", Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
+            if (idempotencyGuard.isAlreadyProcessed("report-user", eventIdStr)) {
                 log.debug("Event {} already processed for search, skipping", eventIdStr);
                 ack.acknowledge();
                 return;

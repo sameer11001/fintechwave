@@ -41,6 +41,8 @@ public class TransactionEventConsumer {
                 case "CASH_OUT_INITIATED" -> handleCashOutInitiated(transactionId, payload);
                 case "CASH_OUT_COMPLETED" -> handleCashOutCompleted(transactionId, payload);
                 case "CASH_OUT_FAILED" -> handleCashOutFailed(transactionId, payload);
+                case "MANUAL_RECONCILIATION_REQUIRED" -> ledgerService.recordManualReconciliation(transactionId, payload.path("reason").asText());
+                case "LEDGER_ROLLBACK_REQUESTED" -> handleLedgerRollbackRequested(transactionId, payload);
                 default -> log.error(
                         "UNKNOWN OR MISSING eventType='{}' received on tx.transaction-events. txId={} Message ignored but requires investigation!",
                         eventType, transactionId);
@@ -91,6 +93,16 @@ public class TransactionEventConsumer {
         UUID senderWalletId = ledgerService.getWalletBalance(senderId).getAccountId();
         ledgerService.release(transactionId, senderWalletId, amount, currency);
         log.info("Ledger released funds for failed P2P txId={}", transactionId);
+    }
+
+    private void handleLedgerRollbackRequested(UUID transactionId, JsonNode payload) {
+        UUID senderId = UUID.fromString(payload.path("senderId").asText());
+        BigDecimal amount = new BigDecimal(payload.path("amount").asText());
+        String currency = payload.path("currency").asText("USD");
+
+        UUID senderWalletId = ledgerService.getWalletBalance(senderId).getAccountId();
+        ledgerService.release(transactionId, senderWalletId, amount, currency);
+        log.info("Ledger rolled back funds for requested txId={}", transactionId);
     }
 
     private void handleCashInCompleted(UUID transactionId, JsonNode payload) {

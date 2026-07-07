@@ -11,7 +11,6 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.time.Instant;
 
 @Component
@@ -20,14 +19,10 @@ import java.time.Instant;
 public class LedgerEventConsumer {
 
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final com.fintechwave.core.messaging.IdempotencyGuard idempotencyGuard;
     private final LedgerIndexingService ledgerIndexingService;
 
-    @KafkaListener(
-        topics = "ledger.transaction-results",
-        groupId = "reporting-service-ledger",
-        containerFactory = "kafkaListenerContainerFactory"
-    )
+    @KafkaListener(topics = "ledger.transaction-results", groupId = "reporting-service-ledger", containerFactory = "kafkaListenerContainerFactory")
     public void onLedgerEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
         try {
             JsonNode root = objectMapper.readTree(record.value());
@@ -35,11 +30,12 @@ public class LedgerEventConsumer {
 
             // Idempotency guard
             String eventId = root.path("idempotencyKey").asText();
-            Boolean isNew = redisTemplate.opsForValue()
-                .setIfAbsent("processed:report-ledger:" + eventId, "1", Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) { 
-                ack.acknowledge(); 
-                return; 
+            if (eventId == null || eventId.isEmpty() || "null".equals(eventId)) {
+                eventId = root.path("id").asText();
+            }
+            if (idempotencyGuard.isAlreadyProcessed("report-ledger", eventId)) {
+                ack.acknowledge();
+                return;
             }
 
             if ("LEDGER_COMMITTED".equals(eventType)) {
@@ -50,16 +46,16 @@ public class LedgerEventConsumer {
                 for (JsonNode entry : entries) {
                     String accountCode = entry.path("accountCode").asText();
                     String accountType = entry.path("accountType").asText();
-                    String entryType  = entry.path("entryType").asText();
+                    String entryType = entry.path("entryType").asText();
                     BigDecimal amount = new BigDecimal(entry.path("amount").asText("0"));
-                    String currency   = entry.path("currency").asText("JOD");
+                    String currency = entry.path("currency").asText("JOD");
                     String description = entry.path("description").asText("");
                     String idempotencyKey = entry.path("idempotencyKey").asText();
 
                     // Index into fintechwave-ledger-entries
                     ledgerIndexingService.indexEntry(
-                        idempotencyKey, transactionId, accountCode, accountType,
-                        entryType, amount, currency, description, Instant.now());
+                            idempotencyKey, transactionId, accountCode, accountType,
+                            entryType, amount, currency, description, Instant.now());
 
                     // Upsert wallet balance
                     if ("2000".equals(accountCode)) {

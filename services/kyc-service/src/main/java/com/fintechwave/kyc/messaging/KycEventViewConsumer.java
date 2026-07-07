@@ -6,12 +6,10 @@ import com.fintechwave.kyc.query.service.KycProjectionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -20,7 +18,7 @@ import java.util.UUID;
 public class KycEventViewConsumer {
 
     private final ObjectMapper objectMapper;
-    private final StringRedisTemplate redisTemplate;
+    private final com.fintechwave.core.messaging.IdempotencyGuard idempotencyGuard;
     private final KycProjectionService projectionService;
 
     @KafkaListener(topics = "kyc.verification-events", groupId = "kyc-service-view-updater", containerFactory = "kafkaListenerContainerFactory")
@@ -32,9 +30,7 @@ public class KycEventViewConsumer {
                 eventIdStr = root.path("id").asText();
             }
 
-            Boolean isNew = redisTemplate.opsForValue()
-                    .setIfAbsent("processed:kyc-view:" + eventIdStr, "1", Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
+            if (idempotencyGuard.isAlreadyProcessed("kyc-view", eventIdStr)) {
                 log.debug("Event {} already processed for view, skipping", eventIdStr);
                 ack.acknowledge();
                 return;

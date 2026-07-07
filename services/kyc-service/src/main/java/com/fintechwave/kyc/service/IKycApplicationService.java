@@ -4,11 +4,9 @@ import com.fintechwave.kyc.dto.request.AdminReviewRequest;
 import com.fintechwave.kyc.dto.request.SubmitKycRequest;
 import com.fintechwave.kyc.dto.response.KycApplicationResponse;
 import com.fintechwave.kyc.dto.response.KycDocumentResponse;
-import com.fintechwave.kyc.domain.enums.DocumentType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.web.multipart.MultipartFile;
-
+import com.fintechwave.kyc.dto.request.UploadDocumentRequest;
 import java.util.UUID;
 
 /**
@@ -46,12 +44,11 @@ public interface IKycApplicationService {
      * Uploads a document for the user's current KYC application.
      * Documents are stored in MinIO; only the reference is persisted.
      *
-     * @param userId       Calling user's Keycloak ID
-     * @param documentType Type of identity document
-     * @param file         Uploaded file (JPEG, PNG, PDF)
+     * @param userId  Calling user's Keycloak ID
+     * @param request Document type and mediaId
      * @return Document reference response
      */
-    KycDocumentResponse uploadDocument(UUID userId, DocumentType documentType, MultipartFile file);
+    KycDocumentResponse uploadDocument(UUID userId, UploadDocumentRequest request);
 
     // ─── Admin operations ─────────────────────────────────────────────────────
 

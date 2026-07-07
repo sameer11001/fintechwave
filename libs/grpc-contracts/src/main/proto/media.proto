@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package com.fintechwave.media.api.grpc;
+
+option java_multiple_files = true;
+option java_package = "com.fintechwave.media.api.grpc";
+option java_outer_classname = "MediaProto";
+
+service MediaVerificationService {
+    rpc ClaimMedia(ClaimMediaRequest) returns (ClaimMediaResponse);
+}
+
+message ClaimMediaRequest {
+    string media_id = 1;
+    string user_id = 2;
+}
+
+message ClaimMediaResponse {
+    bool valid = 1;
+    string object_key = 2;
+}

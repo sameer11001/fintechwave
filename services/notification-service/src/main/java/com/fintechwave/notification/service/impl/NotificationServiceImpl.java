@@ -8,8 +8,6 @@ import com.fintechwave.notification.repository.ProcessedEventRepository;
 import com.fintechwave.notification.service.INotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,7 +22,7 @@ public class NotificationServiceImpl implements INotificationService {
 
     private final NotificationRepository notificationRepository;
     private final ProcessedEventRepository processedEventRepository;
-    private final JavaMailSender mailSender;
+    private final NotificationDispatcher notificationDispatcher;
 
     @Override
     @Transactional
@@ -54,11 +52,7 @@ public class NotificationServiceImpl implements INotificationService {
 
         // ── 3. Dispatch by channel ───────────────────────────────────────────
         try {
-            switch (channel) {
-                case EMAIL -> sendEmail(recipientId, subject, body);
-                case SMS -> sendSms(recipientId, body);
-                case PUSH -> sendPush(recipientId, subject, body);
-            }
+            notificationDispatcher.dispatch(channel, recipientId, subject, body);
             notification.setStatus(NotificationStatus.SENT);
             notification.setSentAt(Instant.now());
             log.info("Notification sent: recipientId={} template={} channel={}", recipientId, templateCode, channel);
@@ -83,30 +77,5 @@ public class NotificationServiceImpl implements INotificationService {
         return deleted;
     }
 
-    // ─── Channel adapters ─────────────────────────────────────────────────────
-
-    private void sendEmail(UUID recipientId, String subject, String body) {
-        // In production: resolve email from user-service via Feign or inject from event
-        // payload.
-        // Placeholder uses recipientId as identifier — replace with actual email
-        // resolution.
-        log.debug("EMAIL dispatch: recipientId={} subject={}", recipientId, subject);
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setTo("user+" + recipientId + "@fintechwave.internal");
-        message.setSubject(subject != null ? subject : "FintechWave Notification");
-        message.setText(body);
-        mailSender.send(message);
-    }
-
-    private void sendSms(UUID recipientId, String body) {
-        // Twilio integration point — stubbed for Phase 3 baseline.
-        // Replace with TwilioSmsAdapter when SMS channel goes live.
-        log.info("SMS dispatch (stubbed): recipientId={} body_length={}", recipientId, body.length());
-    }
-
-    private void sendPush(UUID recipientId, String title, String body) {
-        // FCM/APNs integration point — stubbed for Phase 3 baseline.
-        // Replace with FcmPushAdapter when push channel goes live.
-        log.info("PUSH dispatch (stubbed): recipientId={} title={}", recipientId, title);
-    }
+    // ─── Channel adapters moved to NotificationDispatcher ──────────────
 }

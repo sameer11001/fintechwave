@@ -2,6 +2,7 @@ package com.fintechwave.iam.messaging;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fintechwave.core.messaging.IdempotencyGuard;
 import com.fintechwave.iam.query.service.UserProfileProjectionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -10,7 +11,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -19,7 +19,7 @@ import java.util.UUID;
 public class UserEventConsumer {
 
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final IdempotencyGuard idempotencyGuard;
     private final UserProfileProjectionService projectionService;
 
     @KafkaListener(topics = "iam.user-events", groupId = "user-service-view-updater", containerFactory = "kafkaListenerContainerFactory")
@@ -32,9 +32,7 @@ public class UserEventConsumer {
                 eventIdStr = root.path("id").asText(); // fallback to outbox event ID
             }
 
-            Boolean isNew = redisTemplate.opsForValue()
-                    .setIfAbsent("processed:user-view:" + eventIdStr, "1", Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
+            if (idempotencyGuard.isAlreadyProcessed("user-view", eventIdStr)) {
                 log.debug("Event {} already processed for view, skipping", eventIdStr);
                 ack.acknowledge();
                 return;

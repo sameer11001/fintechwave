@@ -9,12 +9,6 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 import java.time.Instant;
 import java.util.UUID;
 
-/**
- * A single identity document uploaded as part of a KYC application.
- * The actual file is stored in MinIO; only the reference (bucket + object key)
- * is persisted here.
- * PII metadata (original file name) is omitted from storage.
- */
 @Entity
 @Table(name = "kyc_documents", indexes = {
         @Index(name = "idx_kyc_doc_application_id", columnList = "application_id"),

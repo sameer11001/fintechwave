@@ -385,4 +385,16 @@ public class LedgerServiceImpl implements ILedgerService {
                             " CREDIT=" + totalCredits + " for transactionId=" + request.transactionId());
         }
     }
+
+    @Override
+    @Transactional
+    public void recordManualReconciliation(UUID transactionId, String reason) {
+        try (var ctx = BusinessContextMdc.of(null, transactionId, "LEDGER_MANUAL_RECONCILIATION")) {
+            log.error("SEV-1: Manual reconciliation recorded for transactionId={}. Reason: {}", transactionId, reason);
+            // TODO: In a production system, this could save to a specific
+            // ManualReconciliation entity table.
+            // For now, we will log it heavily and rely on the observability stack to catch
+            // this SEV-1.
+        }
+    }
 }

@@ -52,6 +52,17 @@ groups:
           description: "{{ $labels.service }} JVM heap is {{ $value | humanizePercentage }}"
           runbook_url: "https://your-wiki/runbooks/jvm-heap-critical"
 
+      # ── Database Connection Pool ──────────────────────────────
+      - alert: HikariConnectionPoolSaturation
+        expr: |
+          hikaricp_connections_active / hikaricp_connections_max > 0.90
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          description: "{{ $labels.service }} database connection pool is >90% saturated."
+          runbook_url: "https://your-wiki/runbooks/db-connection-pool-saturation"
+
       # ── Transaction Stuck State ─────────────────────────────
       - alert: StuckTransactions
         expr: |
@@ -62,6 +73,26 @@ groups:
         annotations:
           description: "{{ $value }} transactions stuck in PENDING state > 10m on {{ $labels.service }}"
           runbook_url: "https://your-wiki/runbooks/stuck-transactions"
+
+      # ── Circuit Breaker State ──────────────────────────────
+      - alert: CircuitBreakerOpen
+        expr: resilience4j_circuitbreaker_state{state="open"} > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          description: "Circuit breaker {{ $labels.name }} is OPEN. Service may be degraded."
+          runbook_url: "https://your-wiki/runbooks/circuit-breaker-open"
+
+      # ── DLT Messages Accumulating ──────────────────────────
+      - alert: DLTMessagesAccumulating
+        expr: increase(kafka_consumer_records_consumed_total{topic=~".*\\.DLT"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          description: "Messages are accumulating in DLT for topic {{ $labels.topic }}."
+          runbook_url: "https://your-wiki/runbooks/dlt-messages-accumulating"
 
   - name: fintechwave_business_alerts
     rules:
@@ -122,18 +153,18 @@ groups:
           description: "{{ $value }} outbox events have not been relayed in > 10m. Check Kafka connectivity."
           runbook_url: "https://your-wiki/runbooks/outbox-relay-stalled"
 
-      # # ── Stripe Webhook Processing Failures ──────────────────────────
-      # - alert: StripeWebhookProcessingFailed
-      #   expr: |
-      #     increase(fintechwave_stripe_webhook_received_total{outcome="failed"}[5m]) > 0
-      #   for: 1m
-      #   labels:
-      #     severity: critical
-      #     team: payments
-      #   annotations:
-      #     summary: "Stripe webhooks are failing to process"
-      #     description: "{{ $value }} Stripe webhooks failed to process in the last 5 minutes. Check application logs for parsing or routing errors."
-      #     runbook_url: "https://your-wiki/runbooks/stripe-webhook-failures"
+      # ── Stripe Webhook Processing Failures ──────────────────────────
+      - alert: StripeWebhookProcessingFailed
+        expr: |
+          increase(fintechwave_stripe_webhook_received_total{outcome="failed"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: payments
+        annotations:
+          summary: "Stripe webhooks are failing to process"
+          description: "{{ $value }} Stripe webhooks failed to process in the last 5 minutes. Check application logs for parsing or routing errors."
+          runbook_url: "https://your-wiki/runbooks/stripe-webhook-failures"
 
 
 #TODO: we need to add the right webhooks

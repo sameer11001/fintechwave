@@ -11,7 +11,7 @@ import com.fintechwave.kyc.exception.KycApplicationNotFoundException;
 import com.fintechwave.kyc.query.entity.KycApplicationView;
 import com.fintechwave.kyc.query.entity.KycDocumentView;
 import com.fintechwave.kyc.query.repository.KycApplicationViewRepository;
-import com.fintechwave.kyc.storage.IDocumentStorageService;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -32,12 +32,6 @@ public class KycProjectionService {
     private final KycApplicationViewRepository repository;
     private final StringRedisTemplate redisTemplate;
     private final ObjectMapper objectMapper;
-    /**
-     * Used only at query time to generate pre-signed URLs on the fly
-     * from the bucket + key already embedded in the document view.
-     * No secondary DB fetch — the metadata is already in MongoDB.
-     */
-    private final IDocumentStorageService storageService;
 
     private static final String CACHE_PREFIX = "fintechwave:kyc-service:app:";
     private static final Duration CACHE_TTL = Duration.ofMinutes(10);
@@ -86,8 +80,7 @@ public class KycProjectionService {
                         .contentType(docView.contentType())
                         .fileSizeBytes(docView.fileSizeBytes())
                         .uploadedAt(docView.uploadedAt())
-                        .downloadUrl(storageService.generatePresignedUrl(
-                                docView.storageBucket(), docView.storageKey()))
+                        .downloadUrl("/api/v1/media/download/" + docView.storageKey())
                         .build())
                 .toList();
     }
@@ -112,8 +105,7 @@ public class KycProjectionService {
                                 .contentType(docView.contentType())
                                 .fileSizeBytes(docView.fileSizeBytes())
                                 .uploadedAt(docView.uploadedAt())
-                                .downloadUrl(storageService.generatePresignedUrl(
-                                        docView.storageBucket(), docView.storageKey()))
+                                .downloadUrl("/api/v1/media/download/" + docView.storageKey())
                                 .build())
                         .toList())
                 .build();

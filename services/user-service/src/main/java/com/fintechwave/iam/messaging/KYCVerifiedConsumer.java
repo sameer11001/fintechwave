@@ -10,7 +10,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
 import java.util.UUID;
 
 @Component
@@ -20,7 +19,7 @@ public class KYCVerifiedConsumer {
 
     private final IUserProfileService userProfileService;
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final com.fintechwave.core.messaging.IdempotencyGuard idempotencyGuard;
 
     @KafkaListener(topics = { "kyc.verification-events" }, groupId = "user-service")
     public void onDomainEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
@@ -28,9 +27,11 @@ public class KYCVerifiedConsumer {
             JsonNode root = objectMapper.readTree(record.value());
 
             String eventIdStr = root.path("idempotencyKey").asText();
-            Boolean isNew = redisTemplate.opsForValue()
-                    .setIfAbsent("processed:user-kyc:" + eventIdStr, "1", Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
+            if (eventIdStr == null || eventIdStr.isEmpty() || "null".equals(eventIdStr)) {
+                eventIdStr = root.path("id").asText();
+            }
+
+            if (idempotencyGuard.isAlreadyProcessed("user-kyc", eventIdStr)) {
                 log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();
                 return;

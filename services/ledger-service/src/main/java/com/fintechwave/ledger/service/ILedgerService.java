@@ -61,4 +61,10 @@ public interface ILedgerService {
 
     /** Finds or creates the platform account for the given code (idempotent). */
     Account getOrCreatePlatformAccount(AccountCode code, String currency);
+
+    /**
+     * Records a manual reconciliation request when automated DLT compensation fails
+     * (e.g. for CASH_OUT_COMPLETED failures).
+     */
+    void recordManualReconciliation(UUID transactionId, String reason);
 }

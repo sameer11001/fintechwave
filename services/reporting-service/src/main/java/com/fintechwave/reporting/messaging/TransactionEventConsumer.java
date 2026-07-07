@@ -2,6 +2,9 @@ package com.fintechwave.reporting.messaging;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fintechwave.core.messaging.IdempotencyGuard;
+import com.fintechwave.reporting.service.SearchIndexingService;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -10,7 +13,6 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -20,8 +22,8 @@ import java.util.UUID;
 public class TransactionEventConsumer {
 
     private final ObjectMapper objectMapper;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
-    private final com.fintechwave.reporting.service.SearchIndexingService searchIndexingService;
+    private final IdempotencyGuard idempotencyGuard;
+    private final SearchIndexingService searchIndexingService;
 
     @KafkaListener(topics = {
             "tx.transaction-events" }, groupId = "reporting-service-tx", containerFactory = "kafkaListenerContainerFactory")
@@ -30,9 +32,10 @@ public class TransactionEventConsumer {
             JsonNode root = objectMapper.readTree(record.value());
 
             String eventIdStr = root.path("idempotencyKey").asText();
-            Boolean isNew = redisTemplate.opsForValue()
-                    .setIfAbsent("processed:report-tx:" + eventIdStr, "1", Duration.ofDays(7));
-            if (Boolean.FALSE.equals(isNew)) {
+            if (eventIdStr == null || eventIdStr.isEmpty() || "null".equals(eventIdStr)) {
+                eventIdStr = root.path("id").asText();
+            }
+            if (idempotencyGuard.isAlreadyProcessed("report-tx", eventIdStr)) {
                 log.debug("Event {} already processed, skipping", eventIdStr);
                 ack.acknowledge();
                 return;

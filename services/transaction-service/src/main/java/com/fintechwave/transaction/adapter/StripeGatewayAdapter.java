@@ -23,6 +23,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
 import java.util.Map;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 
 import java.util.concurrent.Semaphore;
 import org.springframework.retry.annotation.Backoff;
@@ -43,20 +44,9 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
         log.info("Stripe adapter initialized");
     }
 
-    /**
-     * Creates a Stripe PaymentIntent for card cash-in.
-     * The client must confirm this intent using Stripe.js on the frontend.
-     *
-     * @param amount                Amount + currency
-     * @param stripePaymentMethodId Stripe Payment Method ID (pm_...)
-     * @return CardPaymentIntent with client secret for frontend confirmation
-     */
     @Override
-    @Retryable(
-        retryFor = { PaymentGatewayException.class },
-        maxAttempts = 3,
-        backoff = @Backoff(delay = 500)
-    )
+    @Retryable(retryFor = { PaymentGatewayException.class }, maxAttempts = 3, backoff = @Backoff(delay = 500))
+    @CircuitBreaker(name = "stripeGateway", fallbackMethod = "fallbackCreateCardPaymentIntent")
     public CardPaymentIntent createCardPaymentIntent(Money amount, String stripePaymentMethodId) {
         try {
             STRIPE_SEMAPHORE.acquire();
@@ -66,11 +56,10 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
         }
         try {
             PaymentIntentCreateParams params = PaymentIntentCreateParams.builder()
-                    .setAmount(amount.toMinorUnits()) // Stripe uses minor units (cents)
+                    .setAmount(amount.toMinorUnits())
                     .setCurrency(amount.currencyCode().toLowerCase())
                     .setPaymentMethod(stripePaymentMethodId)
                     .setCaptureMethod(PaymentIntentCreateParams.CaptureMethod.AUTOMATIC)
-                    // Automatically confirm if testing via API without a frontend
                     .setConfirm(true)
                     .setReturnUrl("https://localhost:8084/api/v1/transactions/return")
                     .build();
@@ -88,13 +77,16 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
         }
     }
 
-    /**
-     * Fallback method executed if all Stripe PaymentIntent retries fail.
-     */
     @Recover
-    public CardPaymentIntent fallbackCreateCardPaymentIntent(PaymentGatewayException e, Money amount, String stripePaymentMethodId) {
+    public CardPaymentIntent fallbackCreateCardPaymentIntent(PaymentGatewayException e, Money amount,
+            String stripePaymentMethodId) {
         log.error("Stripe API completely unavailable for amount {}. Fallback triggered.", amount, e);
         throw new PaymentGatewayException("Payment processor is currently down. Please try again later.", e);
+    }
+
+    public CardPaymentIntent fallbackCreateCardPaymentIntent(Throwable t, Money amount, String stripePaymentMethodId) {
+        log.error("Circuit breaker OPEN. Stripe is unavailable for create payment intent. Error: {}", t.getMessage());
+        throw new PaymentGatewayException("Payment processor is currently down (circuit open).", t);
     }
 
     /**
@@ -108,6 +100,9 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
      * @return PayoutResult with payout ID and status
      */
     @Override
+    @Retryable(retryFor = {
+            PaymentGatewayException.class }, maxAttempts = 3, backoff = @Backoff(delay = 1000, multiplier = 2))
+    @CircuitBreaker(name = "stripeGateway", fallbackMethod = "fallbackInstantPayout")
     public PayoutResult initiateInstantPayout(String stripePaymentMethodId, Money amount) {
         try {
             STRIPE_SEMAPHORE.acquire();
@@ -140,14 +135,17 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
         }
     }
 
-    /**
-     * Validates the Stripe-Signature header on incoming webhook events.
-     * Throws PaymentGatewayException if the signature is invalid.
-     *
-     * @param payload   Raw request body (must not be parsed before this call)
-     * @param signature Stripe-Signature header value
-     * @return Parsed WebhookEvent with type and object ID
-     */
+    @Recover
+    public PayoutResult fallbackInstantPayout(PaymentGatewayException e, String stripePaymentMethodId, Money amount) {
+        log.error("All payout retries failed for amount={}. Requires manual reconciliation.", amount, e);
+        throw new PaymentGatewayException("Payout processor unavailable after retries.", e);
+    }
+
+    public PayoutResult fallbackInstantPayout(Throwable t, String stripePaymentMethodId, Money amount) {
+        log.error("Circuit breaker OPEN. Stripe is unavailable for payout. Error: {}", t.getMessage());
+        throw new PaymentGatewayException("Payout processor unavailable (circuit open).", t);
+    }
+
     @Override
     public WebhookEvent parseAndValidateWebhook(String payload, String signature) {
         try {
