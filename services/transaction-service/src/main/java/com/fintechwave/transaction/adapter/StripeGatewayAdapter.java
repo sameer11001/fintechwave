@@ -84,7 +84,7 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
         throw new PaymentGatewayException("Payment processor is currently down. Please try again later.", e);
     }
 
-    public CardPaymentIntent fallbackCreateCardPaymentIntent(Throwable t, Money amount, String stripePaymentMethodId) {
+    public CardPaymentIntent fallbackCreateCardPaymentIntent(Money amount, String stripePaymentMethodId, Throwable t) {
         log.error("Circuit breaker OPEN. Stripe is unavailable for create payment intent. Error: {}", t.getMessage());
         throw new PaymentGatewayException("Payment processor is currently down (circuit open).", t);
     }
@@ -141,7 +141,7 @@ public class StripeGatewayAdapter implements PaymentGatewayPort {
         throw new PaymentGatewayException("Payout processor unavailable after retries.", e);
     }
 
-    public PayoutResult fallbackInstantPayout(Throwable t, String stripePaymentMethodId, Money amount) {
+    public PayoutResult fallbackInstantPayout(String stripePaymentMethodId, Money amount, Throwable t) {
         log.error("Circuit breaker OPEN. Stripe is unavailable for payout. Error: {}", t.getMessage());
         throw new PaymentGatewayException("Payout processor unavailable (circuit open).", t);
     }

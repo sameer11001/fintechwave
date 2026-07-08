@@ -15,6 +15,7 @@ import com.fintechwave.reporting.dto.TrialBalanceResponse;
 import com.fintechwave.reporting.dto.AccountBalanceDTO;
 import com.fintechwave.reporting.dto.WalletBucket;
 import com.fintechwave.reporting.dto.WalletDistributionResponse;
+import com.fintechwave.reporting.util.ElasticAggregationUtil;
 import lombok.RequiredArgsConstructor;
 import co.elastic.clients.elasticsearch._types.aggregations.StringTermsBucket;
 import org.springframework.data.elasticsearch.client.elc.ElasticsearchAggregation;
@@ -49,20 +50,15 @@ public class LedgerReportService {
                                 .must(m -> m.terms(t -> t.field("accountCode").terms(t2 -> t2.value(List.of(
                                         co.elastic.clients.elasticsearch._types.FieldValue.of("3000"),
                                         co.elastic.clients.elasticsearch._types.FieldValue.of("3001"),
-                                        co.elastic.clients.elasticsearch._types.FieldValue.of("3002")
-                                )))))
+                                        co.elastic.clients.elasticsearch._types.FieldValue.of("3002"))))))
                                 .must(m -> m.term(t -> t.field("entryType").value("CREDIT")))
-                                .must(m -> m.range(r -> r.date(d -> d.field("occurredAt").gte(from.toString()))))
-                        )
-                )
+                                .must(m -> m.range(r -> r.date(d -> d.field("occurredAt").gte(from.toString()))))))
                 .withAggregation("by_period", Aggregation.of(a -> a
                         .dateHistogram(dh -> dh
                                 .field("occurredAt")
-                                .calendarInterval(calendarInterval)
-                        )
+                                .calendarInterval(calendarInterval))
                         .aggregations("revenue_sum", Aggregation.of(sa -> sa
-                                .sum(s -> s.field("amount"))))
-                ))
+                                .sum(s -> s.field("amount"))))))
                 .withMaxResults(0)
                 .build();
 
@@ -80,9 +76,9 @@ public class LedgerReportService {
                     List<DateHistogramBucket> buckets = aggregate.dateHistogram().buckets().array();
                     for (DateHistogramBucket bucket : buckets) {
                         labels.add(bucket.keyAsString());
-                        Aggregate sumAgg = bucket.aggregations().get("revenue_sum");
-                        double sum = sumAgg != null && sumAgg.isSum() ? sumAgg.sum().value() : 0.0;
-                        revenue.add(sum / 1000.0);
+                        revenue.add(
+                                ElasticAggregationUtil.extractFilteredSum(bucket.aggregations(), "revenue_sum", "sum")
+                                        .doubleValue() / 1000.0);
                     }
                 }
             }
@@ -99,10 +95,7 @@ public class LedgerReportService {
                                         AggregationRange.of(ar -> ar.key("$0-$100").from(0.0).to(100.0)),
                                         AggregationRange.of(ar -> ar.key("$100-$1K").from(100.0).to(1000.0)),
                                         AggregationRange.of(ar -> ar.key("$1K-$10K").from(1000.0).to(10000.0)),
-                                        AggregationRange.of(ar -> ar.key("$10K+").from(10000.0))
-                                )
-                        )
-                ))
+                                        AggregationRange.of(ar -> ar.key("$10K+").from(10000.0))))))
                 .withMaxResults(0)
                 .build();
 
@@ -133,25 +126,19 @@ public class LedgerReportService {
                 .filter(f -> f.bool(b -> b
                         .must(m -> m.term(t -> t.field("accountCode").value("1000")))
                         .must(m -> m.term(t -> t.field("entryType").value("DEBIT")))
-                        .must(m -> m.range(r -> r.date(d -> d.field("occurredAt").gte(from.toString()))))
-                ))
+                        .must(m -> m.range(r -> r.date(d -> d.field("occurredAt").gte(from.toString()))))))
                 .aggregations("daily", Aggregation.of(da -> da
                         .dateHistogram(dh -> dh.field("occurredAt").calendarInterval(CalendarInterval.Day))
-                        .aggregations("sum", Aggregation.of(s -> s.sum(sm -> sm.field("amount"))))
-                ))
-        );
+                        .aggregations("sum", Aggregation.of(s -> s.sum(sm -> sm.field("amount")))))));
 
         Aggregation cashOutAgg = Aggregation.of(a -> a
                 .filter(f -> f.bool(b -> b
                         .must(m -> m.term(t -> t.field("accountCode").value("1000")))
                         .must(m -> m.term(t -> t.field("entryType").value("CREDIT")))
-                        .must(m -> m.range(r -> r.date(d -> d.field("occurredAt").gte(from.toString()))))
-                ))
+                        .must(m -> m.range(r -> r.date(d -> d.field("occurredAt").gte(from.toString()))))))
                 .aggregations("daily", Aggregation.of(da -> da
                         .dateHistogram(dh -> dh.field("occurredAt").calendarInterval(CalendarInterval.Day))
-                        .aggregations("sum", Aggregation.of(s -> s.sum(sm -> sm.field("amount"))))
-                ))
-        );
+                        .aggregations("sum", Aggregation.of(s -> s.sum(sm -> sm.field("amount")))))));
 
         NativeQuery query = NativeQuery.builder()
                 .withAggregation("cash_in", cashInAgg)
@@ -168,13 +155,13 @@ public class LedgerReportService {
 
         if (searchHits.getAggregations() != null) {
             ElasticsearchAggregations aggregations = (ElasticsearchAggregations) searchHits.getAggregations();
-            
+
             // Generate labels for the last 'days' days
             for (int i = days; i >= 0; i--) {
                 ZonedDateTime dt = Instant.now().minus(i, ChronoUnit.DAYS).atZone(ZoneId.systemDefault());
                 String label = dt.format(DateTimeFormatter.ofPattern("MMM d"));
                 labels.add(label);
-                
+
                 // Defaults
                 cashInList.add(BigDecimal.ZERO);
                 cashOutList.add(BigDecimal.ZERO);
@@ -195,9 +182,8 @@ public class LedgerReportService {
                             String label = dt.format(DateTimeFormatter.ofPattern("MMM d"));
                             int idx = labels.indexOf(label);
                             if (idx >= 0) {
-                                Aggregate sumAgg = bucket.aggregations().get("sum");
-                                double sum = sumAgg != null && sumAgg.isSum() ? sumAgg.sum().value() : 0.0;
-                                cashInList.set(idx, BigDecimal.valueOf(sum));
+                                cashInList.set(idx,
+                                        ElasticAggregationUtil.extractFilteredSum(bucket.aggregations(), "sum", "sum"));
                             }
                         }
                     }
@@ -218,15 +204,14 @@ public class LedgerReportService {
                             String label = dt.format(DateTimeFormatter.ofPattern("MMM d"));
                             int idx = labels.indexOf(label);
                             if (idx >= 0) {
-                                Aggregate sumAgg = bucket.aggregations().get("sum");
-                                double sum = sumAgg != null && sumAgg.isSum() ? sumAgg.sum().value() : 0.0;
-                                cashOutList.set(idx, BigDecimal.valueOf(sum));
+                                cashOutList.set(idx,
+                                        ElasticAggregationUtil.extractFilteredSum(bucket.aggregations(), "sum", "sum"));
                             }
                         }
                     }
                 }
             }
-            
+
             // Calculate net
             for (int i = 0; i < labels.size(); i++) {
                 netList.set(i, cashInList.get(i).subtract(cashOutList.get(i)));
@@ -248,29 +233,24 @@ public class LedgerReportService {
         BigDecimal userLiabilitiesReadModel = BigDecimal.ZERO;
         if (walletHits.getAggregations() != null) {
             ElasticsearchAggregations aggregations = (ElasticsearchAggregations) walletHits.getAggregations();
-            ElasticsearchAggregation agg = aggregations.get("total_wallet_balance");
-            if (agg != null && agg.aggregation().getAggregate().isSum()) {
-                userLiabilitiesReadModel = BigDecimal.valueOf(agg.aggregation().getAggregate().sum().value());
-            }
+            userLiabilitiesReadModel = ElasticAggregationUtil.extractTopLevelSumAsBigDecimal(aggregations,
+                    "total_wallet_balance");
         }
 
         // 2. Calculate platform float balance (1000) and ledger user liabilities (2000)
         Aggregation debitAgg = Aggregation.of(a -> a
                 .filter(f -> f.term(t -> t.field("entryType").value("DEBIT")))
-                .aggregations("sum_debits", Aggregation.of(s -> s.sum(sm -> sm.field("amount"))))
-        );
+                .aggregations("sum_debits", Aggregation.of(s -> s.sum(sm -> sm.field("amount")))));
 
         Aggregation creditAgg = Aggregation.of(a -> a
                 .filter(f -> f.term(t -> t.field("entryType").value("CREDIT")))
-                .aggregations("sum_credits", Aggregation.of(s -> s.sum(sm -> sm.field("amount"))))
-        );
+                .aggregations("sum_credits", Aggregation.of(s -> s.sum(sm -> sm.field("amount")))));
 
         NativeQuery ledgerQuery = NativeQuery.builder()
                 .withAggregation("by_account", Aggregation.of(a -> a
                         .terms(t -> t.field("accountCode").size(100))
                         .aggregations("debits", debitAgg)
-                        .aggregations("credits", creditAgg)
-                ))
+                        .aggregations("credits", creditAgg)))
                 .withMaxResults(0)
                 .build();
 
@@ -286,24 +266,10 @@ public class LedgerReportService {
                 List<StringTermsBucket> buckets = eAgg.aggregation().getAggregate().sterms().buckets().array();
                 for (StringTermsBucket bucket : buckets) {
                     String accountCode = bucket.key().stringValue();
-                    BigDecimal debits = BigDecimal.ZERO;
-                    BigDecimal credits = BigDecimal.ZERO;
-
-                    Aggregate debitFilter = bucket.aggregations().get("debits");
-                    if (debitFilter != null && debitFilter.isFilter()) {
-                        Aggregate sumAgg = debitFilter.filter().aggregations().get("sum_debits");
-                        if (sumAgg != null && sumAgg.isSum()) {
-                            debits = BigDecimal.valueOf(sumAgg.sum().value());
-                        }
-                    }
-
-                    Aggregate creditFilter = bucket.aggregations().get("credits");
-                    if (creditFilter != null && creditFilter.isFilter()) {
-                        Aggregate sumAgg = creditFilter.filter().aggregations().get("sum_credits");
-                        if (sumAgg != null && sumAgg.isSum()) {
-                            credits = BigDecimal.valueOf(sumAgg.sum().value());
-                        }
-                    }
+                    BigDecimal debits = ElasticAggregationUtil.extractFilteredSum(bucket.aggregations(), "debits",
+                            "sum_debits");
+                    BigDecimal credits = ElasticAggregationUtil.extractFilteredSum(bucket.aggregations(), "credits",
+                            "sum_credits");
 
                     if ("1000".equals(accountCode)) {
                         assetFloatBalance = debits.subtract(credits);
@@ -314,7 +280,8 @@ public class LedgerReportService {
             }
         }
 
-        // True divergence checks if the read model matches the ledger source-of-truth for account 2000
+        // True divergence checks if the read model matches the ledger source-of-truth
+        // for account 2000
         BigDecimal divergenceDiscrepancy = userLiabilitiesReadModel.subtract(ledgerUserLiabilities).abs();
         String reconStatus = divergenceDiscrepancy.compareTo(BigDecimal.ZERO) == 0 ? "HEALTHY" : "DIVERGED";
 
@@ -323,8 +290,7 @@ public class LedgerReportService {
                 userLiabilitiesReadModel,
                 divergenceDiscrepancy,
                 reconStatus,
-                Instant.now()
-        );
+                Instant.now());
     }
 
     public TrialBalanceResponse getTrialBalance(String period) {
@@ -332,21 +298,18 @@ public class LedgerReportService {
 
         Aggregation debitAgg = Aggregation.of(a -> a
                 .filter(f -> f.term(t -> t.field("entryType").value("DEBIT")))
-                .aggregations("sum_debits", Aggregation.of(s -> s.sum(sm -> sm.field("amount"))))
-        );
+                .aggregations("sum_debits", Aggregation.of(s -> s.sum(sm -> sm.field("amount")))));
 
         Aggregation creditAgg = Aggregation.of(a -> a
                 .filter(f -> f.term(t -> t.field("entryType").value("CREDIT")))
-                .aggregations("sum_credits", Aggregation.of(s -> s.sum(sm -> sm.field("amount"))))
-        );
+                .aggregations("sum_credits", Aggregation.of(s -> s.sum(sm -> sm.field("amount")))));
 
         NativeQuery query = NativeQuery.builder()
                 .withQuery(q -> q.range(r -> r.date(d -> d.field("occurredAt").gte(from.toString()))))
                 .withAggregation("by_account", Aggregation.of(a -> a
                         .terms(t -> t.field("accountCode").size(100))
                         .aggregations("debits", debitAgg)
-                        .aggregations("credits", creditAgg)
-                ))
+                        .aggregations("credits", creditAgg)))
                 .withMaxResults(0)
                 .build();
 
@@ -359,7 +322,7 @@ public class LedgerReportService {
         if (searchHits.getAggregations() != null) {
             ElasticsearchAggregations aggregations = (ElasticsearchAggregations) searchHits.getAggregations();
             ElasticsearchAggregation eAgg = aggregations.get("by_account");
-            
+
             if (eAgg != null && eAgg.aggregation().getAggregate().isSterms()) {
                 List<StringTermsBucket> buckets = eAgg.aggregation().getAggregate().sterms().buckets().array();
                 for (StringTermsBucket bucket : buckets) {
@@ -367,28 +330,16 @@ public class LedgerReportService {
                     String accountName = getAccountName(accountCode);
                     String accountType = getAccountType(accountCode);
 
-                    BigDecimal debits = BigDecimal.ZERO;
-                    Aggregate debitFilter = bucket.aggregations().get("debits");
-                    if (debitFilter != null && debitFilter.isFilter()) {
-                        Aggregate sumAgg = debitFilter.filter().aggregations().get("sum_debits");
-                        if (sumAgg != null && sumAgg.isSum()) {
-                            debits = BigDecimal.valueOf(sumAgg.sum().value());
-                        }
-                    }
-
-                    BigDecimal credits = BigDecimal.ZERO;
-                    Aggregate creditFilter = bucket.aggregations().get("credits");
-                    if (creditFilter != null && creditFilter.isFilter()) {
-                        Aggregate sumAgg = creditFilter.filter().aggregations().get("sum_credits");
-                        if (sumAgg != null && sumAgg.isSum()) {
-                            credits = BigDecimal.valueOf(sumAgg.sum().value());
-                        }
-                    }
+                    BigDecimal debits = ElasticAggregationUtil.extractFilteredSum(bucket.aggregations(), "debits",
+                            "sum_debits");
+                    BigDecimal credits = ElasticAggregationUtil.extractFilteredSum(bucket.aggregations(), "credits",
+                            "sum_credits");
 
                     BigDecimal balance = calculateBalance(accountType, debits, credits);
 
-                    accounts.add(new AccountBalanceDTO(accountCode, accountName, accountType, debits, credits, balance));
-                    
+                    accounts.add(
+                            new AccountBalanceDTO(accountCode, accountName, accountType, debits, credits, balance));
+
                     totalSystemDebits = totalSystemDebits.add(debits);
                     totalSystemCredits = totalSystemCredits.add(credits);
                 }
@@ -399,7 +350,7 @@ public class LedgerReportService {
         return new TrialBalanceResponse(accounts, totalSystemDebits, totalSystemCredits, isBalanced);
     }
 
-    private String getAccountName(String accountCode) {
+    private static String getAccountName(String accountCode) {
         return switch (accountCode) {
             case "1000" -> "Platform Float";
             case "2000" -> "User Wallets";
@@ -410,15 +361,19 @@ public class LedgerReportService {
         };
     }
 
-    private String getAccountType(String accountCode) {
-        if (accountCode.startsWith("1")) return "ASSET";
-        if (accountCode.startsWith("2")) return "LIABILITY";
-        if (accountCode.startsWith("3")) return "REVENUE";
-        if (accountCode.startsWith("4")) return "EXPENSE";
+    private static String getAccountType(String accountCode) {
+        if (accountCode.startsWith("1"))
+            return "ASSET";
+        if (accountCode.startsWith("2"))
+            return "LIABILITY";
+        if (accountCode.startsWith("3"))
+            return "REVENUE";
+        if (accountCode.startsWith("4"))
+            return "EXPENSE";
         return "UNKNOWN";
     }
 
-    private BigDecimal calculateBalance(String accountType, BigDecimal debits, BigDecimal credits) {
+    private static BigDecimal calculateBalance(String accountType, BigDecimal debits, BigDecimal credits) {
         if ("ASSET".equals(accountType) || "EXPENSE".equals(accountType)) {
             return debits.subtract(credits);
         } else {
@@ -426,7 +381,7 @@ public class LedgerReportService {
         }
     }
 
-    private Instant calculateFrom(String period) {
+    private static Instant calculateFrom(String period) {
         if ("1W".equalsIgnoreCase(period)) {
             return Instant.now().minus(7, ChronoUnit.DAYS);
         } else if ("3M".equalsIgnoreCase(period)) {

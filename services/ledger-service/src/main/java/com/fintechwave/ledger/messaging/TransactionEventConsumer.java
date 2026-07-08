@@ -61,7 +61,7 @@ public class TransactionEventConsumer {
         String currency = payload.path("currency").asText("USD");
         BigDecimal feeAmount = new BigDecimal(payload.path("feeAmount").asText("0"));
 
-        UUID receiverWalletId = ledgerService.getWalletBalance(receiverId).getAccountId();
+        UUID receiverWalletId = ledgerService.provisionWallet(receiverId, currency).getAccountId();
         ledgerService.commit(transactionId, receiverWalletId, amount, currency);
         
         if (feeAmount.compareTo(BigDecimal.ZERO) > 0) {
@@ -110,7 +110,7 @@ public class TransactionEventConsumer {
         BigDecimal amount = new BigDecimal(payload.path("amount").asText());
         String currency = payload.path("currency").asText("USD");
 
-        UUID userWalletId = ledgerService.getWalletBalance(userId).getAccountId();
+        UUID userWalletId = ledgerService.provisionWallet(userId, currency).getAccountId();
         Account platformFloat = ledgerService.getOrCreatePlatformAccount(AccountCode.PLATFORM_FLOAT, currency);
 
         ledgerService.commitDoubleEntry(new DoubleEntryRequest(

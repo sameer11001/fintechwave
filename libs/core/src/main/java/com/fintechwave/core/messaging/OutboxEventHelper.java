@@ -33,4 +33,23 @@ public final class OutboxEventHelper {
             Object payload) {
         return new GenericDomainEvent(eventType, version, aggregateId, aggregateType, payload);
     }
+
+    public static OutboxEventEnvelope prepare(
+            ObjectMapper mapper,
+            String eventType,
+            int version,
+            UUID aggregateId,
+            String aggregateType,
+            Object payload) {
+        GenericDomainEvent event = buildDomainEvent(eventType, version, aggregateId, aggregateType, payload);
+        String payloadJson = toJson(mapper, event);
+        return new OutboxEventEnvelope(
+                event.getAggregateId(),
+                event.getAggregateType(),
+                event.getEventType(),
+                event.getEventVersion(),
+                event.getIdempotencyKey(),
+                event.getOccurredAt(),
+                payloadJson);
+    }
 }

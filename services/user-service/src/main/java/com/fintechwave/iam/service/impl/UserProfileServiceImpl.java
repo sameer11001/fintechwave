@@ -23,7 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
 import java.util.UUID;
-import com.fintechwave.events.GenericDomainEvent;
+import com.fintechwave.core.messaging.OutboxEventEnvelope;
 import com.fintechwave.core.messaging.OutboxEventHelper;
 
 @Service
@@ -109,25 +109,14 @@ public class UserProfileServiceImpl implements IUserProfileService {
         profile.setKycTier(kycTier);
         UserProfile saved = userProfileRepository.save(profile);
 
-        GenericDomainEvent domainEvent = OutboxEventHelper.buildDomainEvent(
-                "KYC_VERIFIED", 1, saved.getId(), "USER",
+        OutboxEventEnvelope env = OutboxEventHelper.prepare(
+                objectMapper, "KYC_VERIFIED", 1, saved.getId(), "USER",
                 Map.of(
                         "userId", saved.getId().toString(),
                         "keycloakId", saved.getKeycloakId().toString(),
                         "kycTier", saved.getKycTier().name()));
 
-        String payloadJson = OutboxEventHelper.toJson(objectMapper, domainEvent);
-
-        OutboxEvent outboxEvent = OutboxEvent.builder()
-                .aggregateId(domainEvent.getAggregateId())
-                .aggregateType(domainEvent.getAggregateType())
-                .eventType(domainEvent.getEventType())
-                .eventVersion(domainEvent.getEventVersion())
-                .idempotencyKey(domainEvent.getIdempotencyKey())
-                .topic(TOPIC_USER_EVENTS)
-                .payload(payloadJson)
-                .build();
-        outboxEventRepository.save(outboxEvent);
+        outboxEventRepository.save(OutboxEvent.from(env, TOPIC_USER_EVENTS));
 
         log.info("KYC tier updated: keycloakId={} tier={}", keycloakId, tier);
     }
@@ -142,24 +131,14 @@ public class UserProfileServiceImpl implements IUserProfileService {
     }
 
     private OutboxEvent buildOutboxEvent(UserProfile profile) {
-        GenericDomainEvent domainEvent = OutboxEventHelper.buildDomainEvent(
-                "USER_REGISTERED", 1, profile.getId(), "USER",
+        OutboxEventEnvelope env = OutboxEventHelper.prepare(
+                objectMapper, "USER_REGISTERED", 1, profile.getId(), "USER",
                 Map.of(
                         "userId", profile.getId().toString(),
                         "keycloakId", profile.getKeycloakId().toString(),
                         "email", profile.getEmail(),
                         "kycTier", profile.getKycTier().name()));
 
-        String payloadJson = OutboxEventHelper.toJson(objectMapper, domainEvent);
-
-        return OutboxEvent.builder()
-                .aggregateId(domainEvent.getAggregateId())
-                .aggregateType(domainEvent.getAggregateType())
-                .eventType(domainEvent.getEventType())
-                .eventVersion(domainEvent.getEventVersion())
-                .idempotencyKey(domainEvent.getIdempotencyKey())
-                .topic(TOPIC_USER_EVENTS)
-                .payload(payloadJson)
-                .build();
+        return OutboxEvent.from(env, TOPIC_USER_EVENTS);
     }
 }

@@ -27,7 +27,7 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
-import com.fintechwave.events.GenericDomainEvent;
+import com.fintechwave.core.messaging.OutboxEventEnvelope;
 import com.fintechwave.core.messaging.OutboxEventHelper;
 
 @Service
@@ -181,18 +181,9 @@ public class FraudServiceImpl implements IFraudService {
         payload.put("riskScore", riskScore);
         payload.put("triggeredRules", triggeredRules);
 
-        GenericDomainEvent domainEvent = OutboxEventHelper.buildDomainEvent(
-                eventType, 1, transactionId, "TRANSACTION", payload);
+        OutboxEventEnvelope env = OutboxEventHelper.prepare(
+                objectMapper, eventType, 1, transactionId, "TRANSACTION", payload);
 
-        String json = OutboxEventHelper.toJson(objectMapper, domainEvent);
-
-        outboxEventRepository.save(OutboxEvent.builder()
-                .aggregateId(domainEvent.getAggregateId())
-                .aggregateType(domainEvent.getAggregateType())
-                .eventType(domainEvent.getEventType())
-                .payload(json)
-                .published(false)
-                .occurredAt(domainEvent.getOccurredAt())
-                .build());
+        outboxEventRepository.save(OutboxEvent.from(env));
     }
 }

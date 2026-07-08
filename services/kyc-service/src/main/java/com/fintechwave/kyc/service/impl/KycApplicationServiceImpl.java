@@ -29,8 +29,8 @@ import com.fintechwave.media.api.grpc.ClaimMediaResponse;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
-import com.fintechwave.events.GenericDomainEvent;
 import com.fintechwave.core.observability.BusinessContextMdc;
+import com.fintechwave.core.messaging.OutboxEventEnvelope;
 import com.fintechwave.core.messaging.OutboxEventHelper;
 
 @Service
@@ -228,18 +228,8 @@ public class KycApplicationServiceImpl implements IKycApplicationService {
 
     private void publishOutboxEvent(UUID aggregateId, String aggregateType,
             String eventType, int version, Map<String, Object> payload) {
-        GenericDomainEvent domainEvent = OutboxEventHelper.buildDomainEvent(
-                eventType, version, aggregateId, aggregateType, payload);
-        String payloadJson = OutboxEventHelper.toJson(objectMapper, domainEvent);
-        OutboxEvent outbox = OutboxEvent.builder()
-                .aggregateId(domainEvent.getAggregateId())
-                .aggregateType(domainEvent.getAggregateType())
-                .eventType(domainEvent.getEventType())
-                .eventVersion(domainEvent.getEventVersion())
-                .payload(payloadJson)
-                .idempotencyKey(domainEvent.getIdempotencyKey())
-                .published(false)
-                .build();
-        outboxEventRepository.save(outbox);
+        OutboxEventEnvelope env = OutboxEventHelper.prepare(
+                objectMapper, eventType, version, aggregateId, aggregateType, payload);
+        outboxEventRepository.save(OutboxEvent.from(env));
     }
 }

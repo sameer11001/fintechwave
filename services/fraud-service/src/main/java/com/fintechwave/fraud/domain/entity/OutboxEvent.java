@@ -1,5 +1,6 @@
 package com.fintechwave.fraud.domain.entity;
 
+import com.fintechwave.core.messaging.OutboxEventEnvelope;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.Instant;
@@ -37,4 +38,15 @@ public class OutboxEvent {
     @Builder.Default
     @Column(name = "occurred_at", nullable = false, updatable = false)
     private Instant occurredAt = Instant.now();
+
+    public static OutboxEvent from(OutboxEventEnvelope env) {
+        return OutboxEvent.builder()
+                .aggregateId(env.aggregateId())
+                .aggregateType(env.aggregateType())
+                .eventType(env.eventType())
+                .payload(env.payloadJson())
+                .published(false)
+                .occurredAt(env.occurredAt())
+                .build();
+    }
 }

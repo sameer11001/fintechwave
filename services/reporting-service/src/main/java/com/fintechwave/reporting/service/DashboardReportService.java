@@ -7,8 +7,10 @@ import com.fintechwave.reporting.dto.DashboardSummaryResponse;
 import com.fintechwave.reporting.dto.HeatmapResponse;
 import com.fintechwave.reporting.dto.KycSummaryResponse;
 import com.fintechwave.reporting.scheduler.HeatmapScheduler;
+import com.fintechwave.reporting.scheduler.HeatmapScheduler;
+import com.fintechwave.core.cache.RedisCounterUtil;
+import com.fintechwave.reporting.util.ElasticAggregationUtil;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.elasticsearch.client.elc.ElasticsearchAggregation;
 import org.springframework.data.elasticsearch.client.elc.ElasticsearchAggregations;
 import org.springframework.data.elasticsearch.client.elc.NativeQuery;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
@@ -31,47 +33,38 @@ public class DashboardReportService {
 
     public DashboardSummaryResponse getDashboardSummary() {
         // Get counts from Redis
-        String activeUsersStr = redisTemplate.opsForValue().get("reporting:active_users_count");
-        long activeUsersCount = activeUsersStr != null ? Long.parseLong(activeUsersStr) : 0L;
-        
-        String pendingKycStr = redisTemplate.opsForValue().get("reporting:pending_kyc_count");
-        long pendingKycApprovals = pendingKycStr != null ? Long.parseLong(pendingKycStr) : 0L;
-        
+        long activeUsersCount = RedisCounterUtil.getLong(redisTemplate, "reporting:active_users_count");
+        long pendingKycApprovals = RedisCounterUtil.getLong(redisTemplate, "reporting:pending_kyc_count");
+
         // Get Total AUM from Wallet Balances
         double totalAum = 0.0;
         NativeQuery aumQuery = NativeQuery.builder()
-            .withAggregation("total_aum", co.elastic.clients.elasticsearch._types.aggregations.Aggregation.of(a -> a
-                .sum(s -> s.field("balance"))))
-            .withMaxResults(0)
-            .build();
+                .withAggregation("total_aum", co.elastic.clients.elasticsearch._types.aggregations.Aggregation.of(a -> a
+                        .sum(s -> s.field("balance"))))
+                .withMaxResults(0)
+                .build();
         SearchHits<WalletBalanceDocument> aumHits = esOps.search(aumQuery, WalletBalanceDocument.class);
         if (aumHits.getAggregations() != null) {
             ElasticsearchAggregations aggregations = (ElasticsearchAggregations) aumHits.getAggregations();
-            ElasticsearchAggregation eAgg = aggregations.get("total_aum");
-            if (eAgg != null && eAgg.aggregation().getAggregate().isSum()) {
-                totalAum = eAgg.aggregation().getAggregate().sum().value();
-            }
+            totalAum = ElasticAggregationUtil.extractTopLevelSum(aggregations, "total_aum");
         }
 
         // Get Daily Volume from Transactions
         double dailyVolume = 0.0;
         Instant yesterday = Instant.now().minus(24, ChronoUnit.HOURS);
         NativeQuery volumeQuery = NativeQuery.builder()
-            .withQuery(q -> q.bool(b -> b
-                .must(m -> m.term(t -> t.field("status").value("COMPLETED")))
-                .must(m -> m.range(r -> r.date(d -> d.field("occurredAt").gte(yesterday.toString()))))
-            ))
-            .withAggregation("daily_volume", co.elastic.clients.elasticsearch._types.aggregations.Aggregation.of(a -> a
-                .sum(s -> s.field("amount"))))
-            .withMaxResults(0)
-            .build();
+                .withQuery(q -> q.bool(b -> b
+                        .must(m -> m.term(t -> t.field("status").value("COMPLETED")))
+                        .must(m -> m.range(r -> r.date(d -> d.field("occurredAt").gte(yesterday.toString()))))))
+                .withAggregation("daily_volume",
+                        co.elastic.clients.elasticsearch._types.aggregations.Aggregation.of(a -> a
+                                .sum(s -> s.field("amount"))))
+                .withMaxResults(0)
+                .build();
         SearchHits<TransactionDocument> volumeHits = esOps.search(volumeQuery, TransactionDocument.class);
         if (volumeHits.getAggregations() != null) {
             ElasticsearchAggregations aggregations = (ElasticsearchAggregations) volumeHits.getAggregations();
-            ElasticsearchAggregation eAgg = aggregations.get("daily_volume");
-            if (eAgg != null && eAgg.aggregation().getAggregate().isSum()) {
-                dailyVolume = eAgg.aggregation().getAggregate().sum().value();
-            }
+            dailyVolume = ElasticAggregationUtil.extractTopLevelSum(aggregations, "daily_volume");
         }
 
         return new DashboardSummaryResponse(totalAum, dailyVolume, activeUsersCount, pendingKycApprovals);
@@ -90,15 +83,10 @@ public class DashboardReportService {
     }
 
     public KycSummaryResponse getKycSummary() {
-        String pendingStr = redisTemplate.opsForValue().get("reporting:pending_kyc_count");
-        long pending = pendingStr != null ? Long.parseLong(pendingStr) : 0L;
-        
-        String approvedStr = redisTemplate.opsForValue().get("reporting:kyc_approved_count");
-        long approved = approvedStr != null ? Long.parseLong(approvedStr) : 0L;
-        
-        String rejectedStr = redisTemplate.opsForValue().get("reporting:kyc_rejected_count");
-        long rejected = rejectedStr != null ? Long.parseLong(rejectedStr) : 0L;
-        
+        long pending = RedisCounterUtil.getLong(redisTemplate, "reporting:pending_kyc_count");
+        long approved = RedisCounterUtil.getLong(redisTemplate, "reporting:kyc_approved_count");
+        long rejected = RedisCounterUtil.getLong(redisTemplate, "reporting:kyc_rejected_count");
+
         return new KycSummaryResponse(pending, approved, rejected);
     }
 }

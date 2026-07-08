@@ -1,5 +1,6 @@
 package com.fintechwave.transaction.domain.entity;
 
+import com.fintechwave.core.messaging.OutboxEventEnvelope;
 import jakarta.persistence.*;
 import lombok.*;
 import org.springframework.data.annotation.CreatedDate;
@@ -51,4 +52,16 @@ public class OutboxEvent {
     @CreatedDate
     @Column(name = "occurred_at", nullable = false, updatable = false)
     private Instant occurredAt;
+
+    public static OutboxEvent from(OutboxEventEnvelope env) {
+        return OutboxEvent.builder()
+                .aggregateId(env.aggregateId())
+                .aggregateType(env.aggregateType())
+                .eventType(env.eventType())
+                .eventVersion(env.eventVersion())
+                .payload(env.payloadJson())
+                .idempotencyKey(env.idempotencyKey())
+                .published(false)
+                .build();
+    }
 }

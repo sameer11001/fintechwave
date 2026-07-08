@@ -1,5 +1,6 @@
 package com.fintechwave.iam.domain.entity;
 
+import com.fintechwave.core.messaging.OutboxEventEnvelope;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -53,4 +54,17 @@ public class OutboxEvent {
 
     @Column(name = "published_at")
     private Instant publishedAt;
+
+    public static OutboxEvent from(OutboxEventEnvelope env, String topic) {
+        return OutboxEvent.builder()
+                .aggregateId(env.aggregateId())
+                .aggregateType(env.aggregateType())
+                .eventType(env.eventType())
+                .eventVersion(env.eventVersion())
+                .idempotencyKey(env.idempotencyKey())
+                .topic(topic)
+                .payload(env.payloadJson())
+                .published(false)
+                .build();
+    }
 }

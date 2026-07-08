@@ -34,7 +34,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.fintechwave.core.observability.BusinessContextMdc;
-import com.fintechwave.events.GenericDomainEvent;
+import com.fintechwave.core.messaging.OutboxEventEnvelope;
 import com.fintechwave.core.messaging.OutboxEventHelper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
@@ -441,18 +441,9 @@ public class TransactionServiceImpl implements ITransactionService {
 
     private void publishOutboxEvent(UUID aggregateId, String aggregateType,
             String eventType, int version, Map<String, Object> payload) {
-        GenericDomainEvent domainEvent = OutboxEventHelper.buildDomainEvent(
-                eventType, version, aggregateId, aggregateType, payload);
-        String payloadJson = OutboxEventHelper.toJson(objectMapper, domainEvent);
-        outboxEventRepository.save(OutboxEvent.builder()
-                .aggregateId(domainEvent.getAggregateId())
-                .aggregateType(domainEvent.getAggregateType())
-                .eventType(domainEvent.getEventType())
-                .eventVersion(domainEvent.getEventVersion())
-                .payload(payloadJson)
-                .idempotencyKey(domainEvent.getIdempotencyKey())
-                .published(false)
-                .build());
+        OutboxEventEnvelope env = OutboxEventHelper.prepare(
+                objectMapper, eventType, version, aggregateId, aggregateType, payload);
+        outboxEventRepository.save(OutboxEvent.from(env));
     }
 
     @Scheduled(fixedDelay = 300_000)
