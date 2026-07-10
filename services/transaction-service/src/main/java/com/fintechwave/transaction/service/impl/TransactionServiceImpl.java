@@ -61,6 +61,7 @@ public class TransactionServiceImpl implements ITransactionService {
     private final LedgerGrpcClient ledgerGrpcClient;
     private final MeterRegistry meterRegistry;
     private final TransactionMapper transactionMapper;
+    private final com.fintechwave.transaction.service.KycPolicyService kycPolicyService;
 
     private Timer p2pTransferTimer;
 
@@ -81,6 +82,7 @@ public class TransactionServiceImpl implements ITransactionService {
 
         return p2pTransferTimer.record(() -> {
             try (var ctx = BusinessContextMdc.of(senderId, null, "P2P_TRANSFER_INITIATED")) {
+                kycPolicyService.enforce(senderId, TransactionType.P2P);
                 guardDuplicate(request.idempotencyKey());
 
                 if (senderId.equals(request.receiverId())) {
@@ -156,6 +158,7 @@ public class TransactionServiceImpl implements ITransactionService {
         currentSpan.setAttribute("fintechwave.user.sender_id", userId.toString());
 
         try (var ctx = BusinessContextMdc.of(userId, null, "CASH_IN_INITIATED")) {
+            kycPolicyService.enforce(userId, TransactionType.CASH_IN);
             guardDuplicate(request.idempotencyKey());
 
             // Create Stripe PaymentIntent
@@ -207,6 +210,7 @@ public class TransactionServiceImpl implements ITransactionService {
         currentSpan.setAttribute("fintechwave.user.sender_id", userId.toString());
 
         try (var ctx = BusinessContextMdc.of(userId, null, "CASH_OUT_INITIATED")) {
+            kycPolicyService.enforce(userId, TransactionType.CASH_OUT);
             guardDuplicate(request.idempotencyKey());
 
             BigDecimal fee = feeService.calculateFee(TransactionType.CASH_OUT, request.amount(), request.currency());
