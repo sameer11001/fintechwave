@@ -1,5 +1,6 @@
 package com.fintechwave.transaction.domain.entity;
 
+import com.fintechwave.core.exception.InvalidStateTransitionException;
 import com.fintechwave.transaction.domain.enums.TransactionStatus;
 import com.fintechwave.transaction.domain.enums.TransactionType;
 import jakarta.persistence.*;
@@ -50,15 +51,12 @@ public class TransactionRecord {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     @Builder.Default
+    @Setter(AccessLevel.NONE)
     private TransactionStatus status = TransactionStatus.INITIATED;
 
-    /** Initiating user (wallet owner who is deducted or who initiates). */
     @Column(name = "sender_id", nullable = false)
     private UUID senderId;
 
-    /**
-     * Receiving user — null for CASH_IN / CASH_OUT where platform is counterparty.
-     */
     @Column(name = "receiver_id")
     private UUID receiverId;
 
@@ -73,22 +71,12 @@ public class TransactionRecord {
     @Builder.Default
     private BigDecimal feeAmount = BigDecimal.ZERO;
 
-    /**
-     * Stripe Payment Intent ID — set for CASH_IN after createCardPaymentIntent().
-     */
     @Column(name = "stripe_payment_intent_id", length = 255)
     private String stripePaymentIntentId;
 
-    /**
-     * Stripe Payout ID — set for CASH_OUT after initiateInstantPayout().
-     */
     @Column(name = "stripe_payout_id", length = 255)
     private String stripePayoutId;
 
-    /**
-     * Unique key for idempotency — same key = same transaction (deduplicated at
-     * insert).
-     */
     @Column(name = "idempotency_key", nullable = false, unique = true)
     private UUID idempotencyKey;
 
@@ -105,4 +93,26 @@ public class TransactionRecord {
 
     @Version
     private Long version;
+
+    public void transition(TransactionStatus newStatus) {
+        if (!isValidTransition(this.status, newStatus)) {
+            throw new InvalidStateTransitionException(
+                    "TransactionRecord", this.status, newStatus);
+        }
+        this.status = newStatus;
+    }
+
+    private static boolean isValidTransition(TransactionStatus from, TransactionStatus to) {
+        return switch (from) {
+            case INITIATED -> to == TransactionStatus.RESERVED || to == TransactionStatus.FAILED
+                    || to == TransactionStatus.PENDING_LEDGER || to == TransactionStatus.FRAUD_CHECK;
+            case FRAUD_CHECK ->
+                to == TransactionStatus.RESERVED || to == TransactionStatus.FLAGGED || to == TransactionStatus.FAILED;
+            case RESERVED -> to == TransactionStatus.COMPLETED || to == TransactionStatus.FAILED || to == TransactionStatus.PENDING_LEDGER;
+            case PENDING_LEDGER -> to == TransactionStatus.COMPLETED || to == TransactionStatus.FAILED;
+            case FLAGGED -> to == TransactionStatus.COMPLETED || to == TransactionStatus.FAILED;
+            case FAILED -> to == TransactionStatus.REVERSED || to == TransactionStatus.REFUNDED;
+            case COMPLETED, REVERSED, REFUNDED, COMMITTED -> false; // terminal
+        };
+    }
 }

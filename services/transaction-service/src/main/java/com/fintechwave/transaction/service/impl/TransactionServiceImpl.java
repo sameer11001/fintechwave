@@ -20,8 +20,11 @@ import com.fintechwave.transaction.exception.InvalidTransactionStateException;
 import com.fintechwave.transaction.mapper.TransactionMapper;
 import com.fintechwave.transaction.repository.OutboxEventRepository;
 import com.fintechwave.transaction.repository.TransactionRepository;
+import com.fintechwave.transaction.saga.TransactionSagaManager;
 import com.fintechwave.transaction.service.IFeeService;
 import com.fintechwave.transaction.service.ITransactionService;
+import com.fintechwave.transaction.service.KycPolicyService;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -61,7 +64,8 @@ public class TransactionServiceImpl implements ITransactionService {
     private final LedgerGrpcClient ledgerGrpcClient;
     private final MeterRegistry meterRegistry;
     private final TransactionMapper transactionMapper;
-    private final com.fintechwave.transaction.service.KycPolicyService kycPolicyService;
+    private final KycPolicyService kycPolicyService;
+    private final TransactionSagaManager sagaManager;
 
     private Timer p2pTransferTimer;
 
@@ -113,11 +117,15 @@ public class TransactionServiceImpl implements ITransactionService {
                 } catch (Exception reserveEx) {
                     log.warn("Ledger reservation failed for txId={} — aborting: {}", tx.getId(),
                             reserveEx.getMessage());
-                    tx.setStatus(TransactionStatus.FAILED);
+                    tx.transition(TransactionStatus.FAILED);
                     transactionRepository.save(tx);
                     throw reserveEx;
                 }
 
+                tx.transition(TransactionStatus.RESERVED);
+                transactionRepository.save(tx);
+
+                // Publish TRANSFER_INITIATED to trigger fraud-service evaluation
                 publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_INITIATED", 1,
                         Map.of(
                                 "transactionId", tx.getId().toString(),
@@ -126,6 +134,10 @@ public class TransactionServiceImpl implements ITransactionService {
                                 "amount", request.amount().toPlainString(),
                                 "currency", request.currency(),
                                 "feeAmount", fee.toPlainString()));
+
+                // Saga records the state — further compensation events are owned by sagaManager
+                sagaManager.onP2PInitiated(tx.getId(), senderId, request.receiverId(), request.amount(), fee,
+                        request.currency());
 
                 log.info("P2P transfer initiated and reserved: txId={} senderId={} amount={} {}", tx.getId(),
                         senderId, request.amount(),
@@ -180,6 +192,8 @@ public class TransactionServiceImpl implements ITransactionService {
 
             MDC.put("transaction_id", tx.getId().toString());
             currentSpan.setAttribute("fintechwave.transaction.id", tx.getId().toString());
+
+            sagaManager.onCashInInitiated(tx.getId(), userId, request.amount(), request.currency());
 
             log.info("Cash-in initiated: txId={} userId={} stripeIntentId={}", tx.getId(), userId,
                     intent.paymentIntentId());
@@ -236,7 +250,7 @@ public class TransactionServiceImpl implements ITransactionService {
             } catch (Exception reserveEx) {
                 log.warn("Ledger reservation failed for cash-out txId={} — aborting: {}", tx.getId(),
                         reserveEx.getMessage());
-                tx.setStatus(TransactionStatus.FAILED);
+                tx.transition(TransactionStatus.FAILED);
                 transactionRepository.save(tx);
                 throw reserveEx;
             }
@@ -246,7 +260,7 @@ public class TransactionServiceImpl implements ITransactionService {
             PayoutResult payout = paymentGateway.initiateInstantPayout(request.stripePaymentMethodId(), money);
 
             tx.setStripePayoutId(payout.payoutId());
-            tx.setStatus(TransactionStatus.RESERVED);
+            tx.transition(TransactionStatus.RESERVED);
             transactionRepository.save(tx);
 
             // Publish event — ledger-service listens to commit on payout.paid webhook
@@ -257,6 +271,8 @@ public class TransactionServiceImpl implements ITransactionService {
                             "amount", request.amount().toPlainString(),
                             "currency", request.currency(),
                             "stripePayoutId", payout.payoutId()));
+
+            sagaManager.onCashOutInitiated(tx.getId(), userId, request.amount(), fee, request.currency());
 
             log.info("Cash-out initiated: txId={} userId={} stripePayoutId={}", tx.getId(), userId, payout.payoutId());
 
@@ -311,14 +327,11 @@ public class TransactionServiceImpl implements ITransactionService {
         transactionRepository.findByStripePaymentIntentId(paymentIntentId)
                 .ifPresentOrElse(tx -> {
                     try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(), "CASH_IN_COMPLETED")) {
-                        tx.setStatus(TransactionStatus.PENDING_LEDGER);
+                        tx.transition(TransactionStatus.PENDING_LEDGER);
                         transactionRepository.save(tx);
 
-                        publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_IN_COMPLETED", 1,
-                                Map.of("transactionId", tx.getId().toString(),
-                                        "userId", tx.getSenderId().toString(),
-                                        "amount", tx.getAmount().toPlainString(),
-                                        "currency", tx.getCurrency()));
+                        // Saga owns publishing CASH_IN_COMPLETED to ledger and recording WAITING_LEDGER step
+                        sagaManager.onStripeSuccess(tx.getId());
 
                         log.info("Cash-in completed via Stripe webhook: txId={}", tx.getId());
                     }
@@ -330,12 +343,11 @@ public class TransactionServiceImpl implements ITransactionService {
         transactionRepository.findByStripePaymentIntentId(paymentIntentId)
                 .ifPresentOrElse(tx -> {
                     try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(), "CASH_IN_FAILED")) {
-                        tx.setStatus(TransactionStatus.FAILED);
+                        tx.transition(TransactionStatus.FAILED);
                         transactionRepository.save(tx);
 
-                        publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_IN_FAILED", 1,
-                                Map.of("transactionId", tx.getId().toString(),
-                                        "userId", tx.getSenderId().toString()));
+                        // Saga marks FAILED (no ledger compensation needed for Cash-In)
+                        sagaManager.onStripeFailed(tx.getId(), "Payment intent failed via Stripe webhook");
 
                         log.warn("Cash-in failed via Stripe webhook: txId={}", tx.getId());
                     }
@@ -347,14 +359,11 @@ public class TransactionServiceImpl implements ITransactionService {
         transactionRepository.findByStripePayoutId(payoutId)
                 .ifPresentOrElse(tx -> {
                     try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(), "CASH_OUT_COMPLETED")) {
-                        tx.setStatus(TransactionStatus.PENDING_LEDGER);
+                        tx.transition(TransactionStatus.PENDING_LEDGER);
                         transactionRepository.save(tx);
 
-                        publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_OUT_COMPLETED", 1,
-                                Map.of("transactionId", tx.getId().toString(),
-                                        "userId", tx.getSenderId().toString(),
-                                        "amount", tx.getAmount().toPlainString(),
-                                        "currency", tx.getCurrency()));
+                        // Saga owns publishing CASH_OUT_COMPLETED to ledger and recording WAITING_LEDGER step
+                        sagaManager.onStripeSuccess(tx.getId());
 
                         log.info("Cash-out completed via payout.paid webhook: txId={}", tx.getId());
                     }
@@ -365,12 +374,11 @@ public class TransactionServiceImpl implements ITransactionService {
         transactionRepository.findByStripePayoutId(payoutId)
                 .ifPresentOrElse(tx -> {
                     try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(), "CASH_OUT_FAILED")) {
-                        tx.setStatus(TransactionStatus.FAILED);
+                        tx.transition(TransactionStatus.FAILED);
                         transactionRepository.save(tx);
 
-                        publishOutboxEvent(tx.getId(), "TRANSACTION", "CASH_OUT_FAILED", 1,
-                                Map.of("transactionId", tx.getId().toString(),
-                                        "userId", tx.getSenderId().toString()));
+                        // Saga owns the CASH_OUT_FAILED compensation event to ledger (releases reserved funds)
+                        sagaManager.onStripeFailed(tx.getId(), "Payout failed via Stripe webhook");
 
                         log.warn("Cash-out failed via payout.failed webhook: txId={}", tx.getId());
                     }
@@ -382,40 +390,32 @@ public class TransactionServiceImpl implements ITransactionService {
     public void handleFraudDecision(UUID transactionId, boolean approved) {
         TransactionRecord tx = transactionRepository.findById(transactionId).orElse(null);
         if (tx == null) {
-            log.warn("handleFraudDecision: transaction not found for txId={} — skipping (likely already cleaned up)",
+            log.warn("handleFraudDecision: transaction not found for txId={} — skipping",
                     transactionId);
             return;
         }
 
         if (tx.getStatus() != TransactionStatus.RESERVED && tx.getStatus() != TransactionStatus.INITIATED) {
-            log.warn("handleFraudDecision: transaction txId={} is already in terminal status={} — skipping",
+            log.warn("handleFraudDecision: txId={} already in terminal status={} — skipping",
                     transactionId, tx.getStatus());
             return;
         }
 
         try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(),
-                approved ? "TRANSFER_COMPLETED" : "TRANSFER_FAILED")) {
+                approved ? "FRAUD_APPROVED" : "FRAUD_REJECTED")) {
             if (approved) {
-                tx.setStatus(TransactionStatus.COMPLETED);
-                publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_COMPLETED", 1,
-                        Map.of("transactionId", tx.getId().toString(),
-                                "senderId", tx.getSenderId().toString(),
-                                "receiverId", tx.getReceiverId().toString(),
-                                "amount", tx.getAmount().toPlainString(),
-                                "feeAmount", tx.getFeeAmount().toPlainString(),
-                                "currency", tx.getCurrency()));
-                log.info("P2P transfer approved by fraud, completing: txId={}", tx.getId());
+                // Saga publishes TRANSFER_COMPLETED to ledger and updates its step to FRAUD_APPROVED
+                tx.transition(TransactionStatus.PENDING_LEDGER);
+                transactionRepository.save(tx);
+                sagaManager.onFraudApproved(tx.getId());
+                log.info("P2P fraud approved — saga commanding ledger commit: txId={}", tx.getId());
             } else {
-                tx.setStatus(TransactionStatus.FAILED);
-                // For release, we must release the amount + fee back to the sender
-                publishOutboxEvent(tx.getId(), "TRANSACTION", "TRANSFER_FAILED", 1,
-                        Map.of("transactionId", tx.getId().toString(),
-                                "senderId", tx.getSenderId().toString(),
-                                "amount", tx.getAmount().add(tx.getFeeAmount()).toPlainString(),
-                                "currency", tx.getCurrency()));
-                log.info("P2P transfer rejected by fraud, failing: txId={}", tx.getId());
+                // Saga publishes TRANSFER_FAILED (compensation) and updates its step to COMPENSATING_FUNDS_RELEASE
+                tx.transition(TransactionStatus.FAILED);
+                transactionRepository.save(tx);
+                sagaManager.onFraudRejected(tx.getId(), "Fraud flagged by risk engine");
+                log.warn("P2P fraud rejected — saga commanding ledger release: txId={}", tx.getId());
             }
-            transactionRepository.save(tx);
         }
     }
 
@@ -425,8 +425,9 @@ public class TransactionServiceImpl implements ITransactionService {
         transactionRepository.findById(transactionId).ifPresentOrElse(tx -> {
             try (var ctx = BusinessContextMdc.of(tx.getSenderId(), tx.getId(), "LEDGER_COMMITTED")) {
                 if (tx.getStatus() == TransactionStatus.PENDING_LEDGER) {
-                    tx.setStatus(TransactionStatus.COMPLETED);
+                    tx.transition(TransactionStatus.COMPLETED);
                     transactionRepository.save(tx);
+                    sagaManager.onLedgerCommitted(tx.getId());
                     log.info("Ledger confirmed, transaction marked COMPLETED: txId={}", transactionId);
                 } else {
                     log.warn("markLedgerCommitted called but tx is not PENDING_LEDGER: txId={} status={}",

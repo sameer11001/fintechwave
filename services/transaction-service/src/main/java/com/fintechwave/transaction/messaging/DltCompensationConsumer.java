@@ -2,16 +2,17 @@ package com.fintechwave.transaction.messaging;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fintechwave.transaction.saga.TransactionSagaManager;
+import com.fintechwave.transaction.service.StripeRefundService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.util.UUID;
-import org.springframework.kafka.core.KafkaTemplate;
-import com.fintechwave.transaction.service.StripeRefundService;
 
 @Component
 @RequiredArgsConstructor
@@ -21,6 +22,7 @@ public class DltCompensationConsumer {
     private final ObjectMapper objectMapper;
     private final StripeRefundService stripeRefundService;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final TransactionSagaManager sagaManager;
 
     @KafkaListener(topics = "tx.transaction-events.DLT", groupId = "tx-service-dlt-compensation", containerFactory = "kafkaListenerContainerFactory")
     public void onDltEvent(ConsumerRecord<String, String> record, Acknowledgment ack) {
@@ -29,37 +31,53 @@ public class DltCompensationConsumer {
             String eventType = root.path("eventType").asText();
             UUID transactionId = UUID.fromString(root.path("aggregateId").asText());
 
-            log.error("Received event on DLT: type={} txId={}. Initiating compensation...", eventType, transactionId);
+            log.error("DLT event received: type={} txId={} — initiating last-resort compensation",
+                    eventType, transactionId);
 
             switch (eventType) {
                 case "CASH_IN_COMPLETED" -> {
-                    log.warn("CASH_IN_COMPLETED failed permanently. Requires Stripe refund for txId={}", transactionId);
+                    // Cash-in ledger commit failed permanently → refund the Stripe charge
                     String paymentIntentId = root.path("payload").path("stripePaymentIntentId").asText();
-                    if (paymentIntentId != null && !paymentIntentId.isEmpty()) {
+                    if (paymentIntentId != null && !paymentIntentId.isBlank()) {
                         stripeRefundService.processRefund(paymentIntentId);
+                        sagaManager.onStripeRefundInitiated(transactionId,
+                                "DLT fallback: CASH_IN_COMPLETED failed permanently — Stripe refund issued");
+                        log.warn("DLT[CASH_IN_COMPLETED]: Stripe refund triggered txId={}", transactionId);
                     } else {
-                        log.error("Cannot process Stripe refund for txId={} because stripePaymentIntentId is missing",
+                        log.error("DLT[CASH_IN_COMPLETED]: cannot refund txId={} — stripePaymentIntentId missing",
                                 transactionId);
+                        sagaManager.onStripeRefundInitiated(transactionId,
+                                "DLT fallback: stripePaymentIntentId missing — manual review required");
                     }
                 }
+
                 case "TRANSFER_COMPLETED" -> {
-                    log.warn("TRANSFER_COMPLETED failed permanently. Requires rollback release for txId={}",
-                            transactionId);
+                    // P2P ledger commit failed permanently → publish rollback to ledger
+                    String rollbackReason = "DLT fallback: TRANSFER_COMPLETED failed permanently — LEDGER_ROLLBACK_REQUESTED";
                     publishCompensationEvent("LEDGER_ROLLBACK_REQUESTED", transactionId, root.path("payload"));
+                    sagaManager.onDltCompensationPublished(transactionId, rollbackReason);
+                    log.warn("DLT[TRANSFER_COMPLETED]: ledger rollback published txId={}", transactionId);
                 }
+
                 case "CASH_OUT_COMPLETED" -> {
-                    log.error("SEV-1: CASH_OUT_COMPLETED failed in ledger. Manual reconciliation required for txId={}",
-                            transactionId);
+                    // Cash-out ledger commit failed permanently → cannot auto-compensate (money
+                    // left account)
+                    // Mark for manual reconciliation and update saga state
+                    String reconcileReason = "DLT fallback: CASH_OUT_COMPLETED failed — SEV-1 manual reconciliation required";
                     publishCompensationEvent("MANUAL_RECONCILIATION_REQUIRED", transactionId,
-                            objectMapper.createObjectNode().put("reason", "CASH_OUT_COMPLETED DLT fallback"));
+                            objectMapper.createObjectNode().put("reason", reconcileReason));
+                    sagaManager.onDltCompensationPublished(transactionId, reconcileReason);
+                    log.error("DLT[CASH_OUT_COMPLETED]: SEV-1 manual reconciliation required txId={}", transactionId);
                 }
-                default -> log.debug("Unhandled DLT event type={} txId={}", eventType, transactionId);
+
+                default -> log.debug("DLT: unhandled event type={} txId={} — no compensation action", eventType,
+                        transactionId);
             }
 
             ack.acknowledge();
         } catch (Exception e) {
-            log.error("Error processing DLT compensation event: offset={} key={}", record.offset(), record.key(), e);
-            throw new RuntimeException("Failed to process DLT compensation", e);
+            log.error("DLT consumer error: offset={} key={}", record.offset(), record.key(), e);
+            throw new RuntimeException("Failed to process DLT compensation event", e);
         }
     }
 
@@ -72,9 +90,9 @@ public class DltCompensationConsumer {
 
             kafkaTemplate.send("tx.transaction-events", transactionId.toString(),
                     objectMapper.writeValueAsString(eventNode));
-            log.info("Published compensation event {} for txId={}", eventType, transactionId);
+            log.info("DLT compensation event published: type={} txId={}", eventType, transactionId);
         } catch (Exception e) {
-            log.error("Failed to publish compensation event {} for txId={}", eventType, transactionId, e);
+            log.error("Failed to publish DLT compensation event type={} txId={}", eventType, transactionId, e);
         }
     }
 }
